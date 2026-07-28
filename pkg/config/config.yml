@@ -1,0 +1,10 @@
+ServerName: LikeBiliStation
+ServerPort: 8080
+
+DSN: "root:123456@tcp(127.0.0.1:721)/likebili?charset=utf8mb4&parseTime=True&loc=Local"
+MaxIdleConns: 10
+MaxOpenConns: 100
+ConnMaxLifetime: 3600
+
+
+

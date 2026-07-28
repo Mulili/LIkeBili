@@ -9,18 +9,18 @@ import (
 )
 
 // 封装视频数据库操作，不含任何业务逻辑
-type VideoRepository struct {
+type Repository struct {
 	db *gorm.DB
 }
 
 // video实例
-func NewVideoRepository(db *gorm.DB) *VideoRepository {
-	return &VideoRepository{db: db}
+func NewRepository(db *gorm.DB) *Repository {
+	return &Repository{db: db}
 }
 
 // CRUD
 // 增加video，将video的信息通过指针传入上下文写入到数据库之中
-func (r *VideoRepository) Create(c context.Context, video *videomodel.Video) error {
+func (r *Repository) Create(c context.Context, video *videomodel.Video) error {
 	result := r.db.WithContext(c).Create(video)
 	if result.Error != nil {
 		//使用%w可以判断错误类型
@@ -30,7 +30,7 @@ func (r *VideoRepository) Create(c context.Context, video *videomodel.Video) err
 }
 
 // 根据videoid查找video
-func (r *VideoRepository) FindByID(c context.Context, id uint) (*videomodel.Video, error) {
+func (r *Repository) FindByID(c context.Context, id uint) (*videomodel.Video, error) {
 	var video videomodel.Video
 	//先First找到主键id为当前id的第一个视频，然后通过Preload将User关联表一起查询随后一起返回
 	result := r.db.WithContext(c).Preload("User").First(&video, id)
@@ -46,7 +46,7 @@ func (r *VideoRepository) FindByID(c context.Context, id uint) (*videomodel.Vide
 }
 
 // 更新视频字段
-func (r *VideoRepository) Update(c context.Context, video *videomodel.Video) error {
+func (r *Repository) Update(c context.Context, video *videomodel.Video) error {
 	/*
 		注意，Save方法将进行全量更新，任何更改或未更改的条目都会被更新
 		这意味着如果你如果不曾更改类似category，也会因为使用Save方法，
@@ -60,14 +60,14 @@ func (r *VideoRepository) Update(c context.Context, video *videomodel.Video) err
 }
 
 // 批量查找视频
-func (r *VideoRepository) FindList(c context.Context, page, pageSize uint, categoryId uint) ([]videomodel.Video, int64, error) {
+func (r *Repository) FindList(c context.Context, page, pageSize uint, categoryId uint) ([]videomodel.Video, int64, error) {
 	var videos []videomodel.Video
 	var total int64
 	//将所有status=1（审核通过）的视频查找出来。
 	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("status = ?", 1)
 	//如果category不为0则根据传入的类型进行查找，否则查找全表
 	if categoryId > 0 {
-		query = r.db.WithContext(c).Where("category = ?", categoryId)
+		query = query.Where("category_id = ?", categoryId)
 	}
 	//查到的所有视频的数量汇总到total之中，用于分页，统计
 	if err := query.Count(&total).Error; err != nil {
@@ -77,24 +77,86 @@ func (r *VideoRepository) FindList(c context.Context, page, pageSize uint, categ
 	//表示跳过多少条信息
 	offset := (page - 1) * pageSize
 	//拼接Sql语句
-	if err := query.Preload("User").Order("create_at DESC").Offset(int(offset)).Limit(int(pageSize)).Find(&videos).Error; err != nil {
+	if err := query.Preload("User").Order("created_at DESC").Offset(int(offset)).Limit(int(pageSize)).Find(&videos).Error; err != nil {
 		return nil, 0, fmt.Errorf("Method:video.repository.FindList: %w", err)
 	}
 	//成功返回视频列表，总数，无错误
 	return videos, total, nil
 }
 
-func (r *VideoRepository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8) ([]videomodel.Video, int64, error) {
-	var video []videomodel.Video
+// 查询用户视频
+func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8) ([]videomodel.Video, int64, error) {
+	var videos []videomodel.Video
 	var total int64
 
 	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("user_id = ?", userid)
-	//不传参时默认不查询审核失败的视频
-	query = query.Where("status != ?", 3)
+
 	//若是传参则使用传入的参数进行判断
 	if status != nil {
 		query = query.Where("status = ?", *status)
+	} else {
+		//不传参时默认不查询审核失败的视频
+		query = query.Where("status != ?", 3)
 	}
+	//统计查询到的视频总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("Method:video.repository.FindListByUser: %w", err)
+	}
+	//分页查询
+	offset := (page - 1) * pageSize
+	query = query.Preload("User").Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&videos)
+	if query.Error != nil {
+		return nil, 0, fmt.Errorf("Method:video.repository.FindListByUser: %w", query.Error)
+	}
+	return videos, total, nil
+}
 
-	return video, total, nil
+// 按状态查询视频
+func (r *Repository) ListByStatus(c context.Context, page, pageSize int, status uint8) ([]videomodel.Video, int64, error) {
+	var videos []videomodel.Video
+	var total int64
+	//按状态查询，status为必填项
+	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("status = ?", status)
+	//统计
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("Method:video.repository.ListByStatus: %w", err)
+	}
+	//分页
+	offset := (page - 1) * pageSize
+	if err := query.Preload("User").Order("created_at Desc").Offset(offset).Limit(pageSize).Find(&videos).Error; err != nil {
+		return nil, 0, fmt.Errorf("Method:video.repository.ListByStatus: %w", err)
+	}
+	return videos, total, nil
+}
+
+// 查询审核通过的公共视频
+// 用于全站排行榜或订阅推送
+func (r *Repository) ListPublic(ctx context.Context) ([]videomodel.Video, error) {
+	var videos []videomodel.Video
+	result := r.db.WithContext(ctx).Preload("User").Where("status = ?", 1).Find(&videos)
+	if result.Error != nil {
+		return nil, fmt.Errorf("Method:video.repository.ListPublic: %w", result.Error)
+	}
+	return videos, nil
+}
+
+// 更新视频时长，用于异步上传视频
+func (r *Repository) UpdateDuration(c context.Context, videoid uint, duration uint) error {
+	result := r.db.WithContext(c).Model(&videomodel.Video{}).Where("ID = ? and duration = 0").Update("duration", duration) //仅在时长为0时修改
+	if result.Error != nil {
+		return fmt.Errorf("Method:video.repository.UpdateDuration: %w", result.Error)
+	}
+	return nil
+}
+
+// 增加播放量
+func (r *Repository) IncrementViews(c context.Context, videoID uint) error {
+	if err := r.db.WithContext(c).
+		Model(&videomodel.Video{}).
+		Where("id = ?", videoID).
+		UpdateColumn("views", gorm.Expr("views + 1")). //利用mysql的InnoDB实现行锁，秒级并发10000
+		Error; err != nil {
+		return fmt.Errorf("Method:video.repository.IncrementViews: %w", err)
+	}
+	return nil
 }

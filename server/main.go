@@ -1,14 +1,16 @@
 package main
 
 import (
-	"LikeBili/config"
+	"LikeBili/pkg/config"
+	"LikeBili/pkg/database"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	config.InitConfig()
+	cfg := config.InitConfig()
+	db := database.InitMySQL(cfg)
 	r := gin.Default()
-
-	r.Run(config.AppConfig.App.Port)
+	db.AutoMigrate()
+	r.Run(cfg.ServerPort)
 }
