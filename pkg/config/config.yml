@@ -1,10 +1,20 @@
 ServerName: LikeBiliStation
 ServerPort: 8080
 
-DSN: "root:123456@tcp(127.0.0.1:721)/likebili?charset=utf8mb4&parseTime=True&loc=Local"
+DBHost: "127.0.0.1"
+DBPort: "721"
+DBUser: "root"
+DBPassword: "123456"
+DBName: "likebili"
 MaxIdleConns: 10
 MaxOpenConns: 100
 ConnMaxLifetime: 3600
 
+RedisHost: "localhost"
+RedisAddr: 6379
+RedisPassword: ""
+RedisDB: 0
+RedisTimeout: 7
 
-
+JWTSecret: "likebili-secret-key"
+JWTExpire: 72

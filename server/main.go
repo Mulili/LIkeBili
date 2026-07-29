@@ -10,6 +10,7 @@ import (
 func main() {
 	cfg := config.InitConfig()
 	db := database.InitMySQL(cfg)
+	// rdb := database.InitRedis(cfg)
 	r := gin.Default()
 	db.AutoMigrate()
 	r.Run(cfg.ServerPort)
