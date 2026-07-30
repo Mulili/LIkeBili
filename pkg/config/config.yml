@@ -18,3 +18,11 @@ RedisTimeout: 7
 
 JWTSecret: "likebili-secret-key"
 JWTExpire: 72
+
+
+MinioEndpoint: "192.168.11.100:9000"
+MinioPublicEndpoint: "192.168.11.100:9000"
+MinioAccessKey: "minioadmin"
+MinioSecretKey: "minioadmin"
+MinioBucket: "likebili"
+MinioUseSSL: "false"

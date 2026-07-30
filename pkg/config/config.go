@@ -28,6 +28,13 @@ type Config struct {
 
 	JWTSecret string
 	JWTExpire int
+
+	MinioEndpoint       string // MinIO 服务端点（内网）
+	MinioPublicEndpoint string // MinIO 公网访问端点
+	MinioAccessKey      string // MinIO 访问密钥
+	MinioSecretKey      string // MinIO 密钥
+	MinioBucket         string // MinIO 存储桶名称
+	MinioUseSSL         bool   // MinIO 是否启用 SSL
 }
 
 func InitConfig() *Config {
@@ -54,6 +61,13 @@ func InitConfig() *Config {
 	//JWT
 	v.SetDefault("JWT_SECRET", "likebili-secret-key")
 	v.SetDefault("JWT_EXPIRE", 72)
+	//MinIO
+	v.SetDefault("MINIO_ENDPOINT", "192.168.11.100:9000")
+	v.SetDefault("MINIO_PUBLIC_ENDPOINT", "192.168.11.100:9000")
+	v.SetDefault("MINIO_ACCESS_KEY", "minioadmin")
+	v.SetDefault("MINIO_SECRET_KEY", "minioadmin")
+	v.SetDefault("MINIO_BUCKET", "likebili")
+	v.SetDefault("MINIO_USE_SSL", false)
 	//配置文件名
 	v.SetConfigName("config")
 	//配置文件后缀
@@ -70,22 +84,28 @@ func InitConfig() *Config {
 	}
 
 	cfg := &Config{
-		ServerName:      v.GetString("SERVER_NAME"),
-		ServerPort:      v.GetString("SERVER_PORT"),
-		DBHost:          v.GetString("DB_HOST"),
-		DBPort:          v.GetString("DB_PORT"),
-		DBUser:          v.GetString("DB_USER"),
-		DBPassword:      v.GetString("DB_PASSWORD"),
-		DBName:          v.GetString("DB_NAME"),
-		MaxIdleConns:    v.GetInt("MAX_IDLE_CONNS"),
-		MaxOpenConns:    v.GetInt("MAX_OPEN_CONNS"),
-		ConnMaxLifetime: v.GetInt("CONN_MAX_LIFETIME"),
-		RedisHost:       v.GetString("REDIS_HOST"),
-		RedisAddr:       v.GetString("REDIS_ADDR"),
-		RedisPassword:   v.GetString("REDIS_PASSWORD"),
-		RedisDB:         v.GetInt("REDIS_DB"),
-		JWTSecret:       v.GetString("JWT_SECRET"),
-		JWTExpire:       v.GetInt("JWT_EXPIRE"),
+		ServerName:          v.GetString("SERVER_NAME"),
+		ServerPort:          v.GetString("SERVER_PORT"),
+		DBHost:              v.GetString("DB_HOST"),
+		DBPort:              v.GetString("DB_PORT"),
+		DBUser:              v.GetString("DB_USER"),
+		DBPassword:          v.GetString("DB_PASSWORD"),
+		DBName:              v.GetString("DB_NAME"),
+		MaxIdleConns:        v.GetInt("MAX_IDLE_CONNS"),
+		MaxOpenConns:        v.GetInt("MAX_OPEN_CONNS"),
+		ConnMaxLifetime:     v.GetInt("CONN_MAX_LIFETIME"),
+		RedisHost:           v.GetString("REDIS_HOST"),
+		RedisAddr:           v.GetString("REDIS_ADDR"),
+		RedisPassword:       v.GetString("REDIS_PASSWORD"),
+		RedisDB:             v.GetInt("REDIS_DB"),
+		JWTSecret:           v.GetString("JWT_SECRET"),
+		JWTExpire:           v.GetInt("JWT_EXPIRE"),
+		MinioEndpoint:       v.GetString("MINIO_ENDPOINT"),
+		MinioPublicEndpoint: v.GetString("MINIO_PUBLIC_ENDPOINT"),
+		MinioAccessKey:      v.GetString("MINIO_ACCESS_KEY"),
+		MinioSecretKey:      v.GetString("MINIO_SECRET_KEY"),
+		MinioBucket:         v.GetString("MINIO_BUCKET"),
+		MinioUseSSL:         v.GetBool("MINIO_USE_SSL"),
 	}
 
 	return cfg
