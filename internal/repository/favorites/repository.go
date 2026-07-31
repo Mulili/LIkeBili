@@ -162,7 +162,7 @@ func (r *Repository) FindFavoriteItems(c context.Context, favoriteID uint, page,
 
 // FindDefaultFavorite 查找用户的默认收藏夹。
 // 默认收藏夹的名称为"默认收藏夹"，在用户注册时自动创建。
-// 返回 (nil, error) 表示查询出错或收藏夹不存在（需调用方判断）。
+// 返回 (nil, nil) 表示收藏夹不存在
 func (r *Repository) FindDefaultFavorite(c context.Context, userid uint) (*modelsFavorites.Favorites, error) {
 	var favorites modelsFavorites.Favorites
 	if err := r.db.WithContext(c).Where("user_id = ? AND name = ?", userid, "默认收藏夹").First(&favorites).Error; err != nil {
