@@ -183,7 +183,7 @@ func (r *Repository) FindItemFirstCover(c context.Context, favoriteID uint) (str
 	var item modelsFavorites.FavoritesItem
 	var video modelVideo.Video
 
-	if err := r.db.WithContext(c).Where("favorites_id = ?", favoriteID).Order("created_at ASC").First(&item).Error; err != nil {
+	if err := r.db.WithContext(c).Where("favorites_id = ?", favoriteID).Order("created_at DESC").First(&item).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return "", nil
 		}

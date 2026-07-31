@@ -25,6 +25,9 @@ const (
 	CodeWrongPassword     = 10004
 	CodePasswordsNotMatch = 10005
 	CodeInternal          = 50000
+	//favorite状态码
+	CodeFavoriteNotFound  = 60001
+	CodeFavoriteForbidden = 60002
 )
 
 var (
@@ -33,6 +36,8 @@ var (
 	ErrUserNotFound      = &Error{Code: CodeUserNotFound, Message: "用户不存在"}
 	ErrWrongPassword     = &Error{Code: CodeWrongPassword, Message: "密码错误"}
 	ErrPasswordsNotMatch = &Error{Code: CodePasswordsNotMatch, Message: "两次密码不一致"}
+	ErrFavoriteNotFound  = &Error{Code: CodeFavoriteNotFound, Message: "收藏夹不存在"}
+	ErrFavoriteForbidden = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
 )
 
 // 创建纯业务错误（不包裹内部 error）

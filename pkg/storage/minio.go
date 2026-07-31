@@ -10,12 +10,19 @@
 //  2. Go 后端通过本包把文件上传到 MinIO 服务器
 //  3. MinIO 返回一个文件 URL，后端把这个 URL 存到数据库里
 //  4. 前端直接通过这个 URL 展示图片/视频
+//
+// 为什么项目要用"对象存储"而不是存本地磁盘？
+//   - 本地磁盘扩容困难，且服务重启/迁移时文件容易丢失
+//   - MinIO 天生支持海量文件、可以横向扩展（多台机器组成集群）
+//   - 文件和数据库解耦：数据库只存一个 URL 字符串，不存二进制数据
 package storage
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"time"
 
 	"LikeBili/pkg/config"
 
@@ -34,7 +41,7 @@ import (
 type MinIO struct {
 	// client 是 MinIO 官方 SDK 提供的客户端对象。
 	// 它负责真正地跟 MinIO 服务器通信（发 HTTP 请求）。
-	// 这个字段不对外暴露，外部代码只能通过下面的 Upload / Delete / GetFileURL 方法间接使用。
+	// 这个字段不对外暴露，外部代码只能通过下面的方法间接使用。
 	client *minio.Client
 
 	// bucketName 是"存储桶"的名字。
@@ -128,7 +135,7 @@ func New(cfg *config.Config) (*MinIO, error) {
 	// --- 第三步：返回包装好的 MinIO 实例 ---
 
 	// 把 SDK 客户端和配置信息打包到 MinIO 结构体中返回。
-	// 后续 Upload / Delete / GetFileURL 都会用到这些信息。
+	// 后续所有上传/删除/URL 生成方法都会用到这些信息。
 	return &MinIO{
 		client:         client,
 		bucketName:     cfg.MinioBucket,
@@ -138,53 +145,84 @@ func New(cfg *config.Config) (*MinIO, error) {
 	}, nil
 }
 
-// Upload 上传一个本地文件到 MinIO 的默认存储桶中。
+// UploadFile 将"内存中的数据流"上传到 MinIO 的默认存储桶。
+//
+// 和之前的 FPutObject（从本地文件上传）不同：
+// FPutObject 需要先把文件存到服务器磁盘，再传给 MinIO，多了一步磁盘 IO。
+// 而 PutObject 直接接收一个 io.Reader（数据流），
+// 可以在不落盘的情况下直接把请求体里的字节流转发给 MinIO，性能更好。
 //
 // 参数说明：
-//   - ctx:          上下文，可以控制超时（比如 30 秒上传超时）
-//   - objectName:   文件在 MinIO 中的"路径名"，例如 "images/avatar/1.jpg"
-//   - filePath:     本地文件的绝对路径，例如 "/tmp/upload_123.jpg"
-//   - contentType:  文件的 MIME 类型，例如 "image/jpeg"、"video/mp4"
+//   - ctx:         上下文，可以控制超时（比如 30 秒上传超时）
+//   - objectName:  文件在 MinIO 中的"路径名"，例如 "images/avatar/1.jpg"
+//   - reader:      文件内容的读取器。Gin 框架中可以用 c.Request.Body 直接传入
+//   - size:        文件字节数。Gin 可以用 c.Request.ContentLength 获取
+//   - contentType: 文件的 MIME 类型，例如 "image/jpeg"、"video/mp4"
 //
-// 返回 minio.UploadInfo 包含上传后的信息（如 ETag、版本号等），通常不常用。
-//
-// 使用示例：
-//
-//	info, err := minioClient.Upload(ctx, "images/avatar/1.jpg", "/tmp/upload.jpg", "image/jpeg")
-//	if err != nil {
-//	    // 处理错误
-//	}
-//	// 上传成功后，通过 GetFileURL 获取可访问的 URL
-//	url := minioClient.GetFileURL("images/avatar/1.jpg")
-func (m *MinIO) Upload(ctx context.Context, objectName, filePath, contentType string) (minio.UploadInfo, error) {
-	// FPutObject 是"从本地文件上传"的意思（F = File）。
-	// 它会读取 filePath 指向的本地文件，上传到 MinIO。
-	info, err := m.client.FPutObject(ctx, m.bucketName, objectName, filePath, minio.PutObjectOptions{
+// 为什么这个项目用 reader 而不是本地文件路径？
+// 因为本项目是 Web 服务，文件是"客户端直接上传到后端"的，后端拿到的本来就是一个数据流，
+// 没必要先写到磁盘再读出来，直接用 PutObject 转发最合理。
+func (m *MinIO) UploadFile(ctx context.Context, objectName string, reader io.Reader, size int64, contentType string) error {
+	// PutObject 是 SDK 的上传方法，第一个参数是 bucket，第二个是对象路径，
+	// 第三个是数据流（reader），第四个是文件大小。
+	_, err := m.client.PutObject(ctx, m.bucketName, objectName, reader, size, minio.PutObjectOptions{
 		// ContentType 告诉浏览器这个文件是什么类型，渲染时才能正确处理。
 		// 比如上传一个 .jpg 但不设 ContentType，浏览器可能不会直接展示图片。
 		ContentType: contentType,
 	})
 	if err != nil {
-		return info, fmt.Errorf("failed to upload file to minio: %w", err)
+		return fmt.Errorf("failed to upload file to minio: %w", err)
 	}
-	return info, nil
+	return nil
 }
 
-// GetFileURL 生成文件对外访问的完整 URL。
+// GetPresignedURL 生成一个"预签名 URL"，允许别人在指定时间内临时访问私有文件。
 //
-// 为什么要有这个方法？
-// MinIO 中的文件不能直接通过路径访问，需要拼接出完整的 URL。
-// 这个 URL 的格式是：协议://公网地址/bucket名/对象路径
-// 例如：http://192.168.11.100:9000/likebili/images/avatar/1.jpg
+// 为什么要预签名？
+// 有些文件不希望永久公开（比如用户的私有视频、草稿），
+// 但直接访问又需要认证，此时可以签发一个带签名的临时链接：
+// 链接里包含了访问凭证，拿到链接的人无需登录就能在有效期内下载。
+// 过期后链接自动失效，既安全又方便。
 //
-// 生成的 URL 可以直接返回给前端，前端用 <img src="..."> 就能展示。
-func (m *MinIO) GetFileURL(objectName string) string {
+// 使用场景：
+//   - 用户分享一个"仅 7 天内有效"的视频链接
+//   - 前端下载私有文件（不公开的文件）
+//
+// 参数说明：
+//   - ctx:     上下文
+//   - objectName: 文件在 MinIO 中的路径名
+//   - expiry:  有效期，例如 7*24*time.Hour 表示 7 天
+//
+// 返回值：
+//   - string：带签名的完整 URL，直接给前端即可
+//   - error：生成失败时返回错误
+func (m *MinIO) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
+	// PresignedGetObject 是 SDK 生成预签名 URL 的方法。
+	// nil 是"请求参数"（如响应头），一般用不到。
+	url, err := m.client.PresignedGetObject(ctx, m.bucketName, objectName, expiry, nil)
+	if err != nil {
+		return "", fmt.Errorf("storage.GetPresignedURL: %w", err)
+	}
+	return url.String(), nil
+}
+
+// GetObjectURL 生成文件的"永久公开"访问 URL。
+//
+// 和 GetPresignedURL 的区别：
+//   - GetObjectURL:     永久有效，适合公开内容（头像、视频封面、公开视频）
+//   - GetPresignedURL:  临时有效，适合私有内容（私密视频、未发布草稿）
+//
+// 前提：这个 bucket 必须配置了公开读取（readonly）权限，
+// 否则即使生成了 URL，浏览器访问也会被 MinIO 拒绝。
+// 在 MinIO Web 控制台 → Bucket → Access Rules 中设置 readonly。
+func (m *MinIO) GetObjectURL(objectName string) string {
 	// 根据是否启用 SSL 决定使用 http 还是 https
 	scheme := "http"
 	if m.useSSL {
 		scheme = "https"
 	}
-	// Sprintf 拼接完整的 URL
+	// URL 格式：协议://公网地址/bucket名/对象路径
+	// 例如：http://192.168.11.100:9000/likebili/images/avatar/1.jpg
 	return fmt.Sprintf("%s://%s/%s/%s", scheme, m.publicEndpoint, m.bucketName, objectName)
 }
 
@@ -204,6 +242,21 @@ func (m *MinIO) Delete(ctx context.Context, objectName string) error {
 	err := m.client.RemoveObject(ctx, m.bucketName, objectName, minio.RemoveObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete object from minio: %w", err)
+	}
+	return nil
+}
+
+// UploadVideo 将视频数据流上传到 MinIO，专用于视频文件。
+//
+// 注意：当前实现与 UploadFile 完全一致，两者是重复代码。
+// 建议后续要么删除本方法统一用 UploadFile，要么在这里扩展视频特有的逻辑
+// （例如：视频转码回调、单独的视频桶、更大的超时时间等）。
+func (m *MinIO) UploadVideo(ctx context.Context, objectName string, reader io.Reader, size int64, contentType string) error {
+	_, err := m.client.PutObject(ctx, m.bucketName, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload file to minio: %w", err)
 	}
 	return nil
 }
