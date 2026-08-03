@@ -2,9 +2,12 @@ package auth
 
 import (
 	usermodel "LikeBili/internal/models/user"
+	codeErrors "LikeBili/pkg/errors"
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +24,10 @@ func NewRepository(db *gorm.DB) *Repository {
 // 创建新用户，如果使用重复的Username和Email则会直接返回数据库错误
 func (r *Repository) Create(c context.Context, user *usermodel.User) error {
 	if err := r.db.WithContext(c).Create(user).Error; err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return codeErrors.ErrUsernameOrEmailExists
+		}
 		return fmt.Errorf("Method:auth.repository.Create: %w", err)
 	}
 	return nil
@@ -49,6 +56,18 @@ func (r *Repository) FindByEmail(c context.Context, email string) (*usermodel.Us
 		return nil, fmt.Errorf("Method:auth.repository.FindByEmail: %w", err)
 	}
 	//使用&将对象地址解析为user对象
+	return &user, nil
+}
+
+// 登录时username或email匹配即可
+func (r *Repository) FindByUsernameOrEmail(c context.Context, account string) (*usermodel.User, error) {
+	var user usermodel.User
+	if err := r.db.WithContext(c).Where("username = ? OR email = ?", account, account).First(&user).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("Method:auth.repository.FindByUsernameOrEmail: %w", err)
+	}
 	return &user, nil
 }
 

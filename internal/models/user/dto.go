@@ -1,5 +1,7 @@
 package user
 
+import "time"
+
 //==============Request===============
 //新用户注册
 type RegisterReq struct {
@@ -33,12 +35,12 @@ type LoginResp struct {
 
 //详细信息
 type UserInfoResp struct {
-	ID        uint   `json:"id"`
-	Username  string `json:"username"`
-	Nickname  string `json:"nickname"`
-	Avatar    string `json:"avatar"`
-	Bio       string `json:"bio"`
-	CreatedAt string `json:"created_at"`
+	ID        uint      `json:"id"`
+	Username  string    `json:"username"`
+	Nickname  string    `json:"nickname"`
+	Avatar    string    `json:"avatar"`
+	Bio       string    `json:"bio"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 //用于搜索列表，好友列表

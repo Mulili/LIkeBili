@@ -24,10 +24,9 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
-	RedisTimeout  int
 
-	JWTSecret string
-	JWTExpire int
+	JWTSecret    string
+	TokenTTLDays int // Token 统一有效期（天），JWT 与 Redis 共用
 
 	MinioEndpoint       string // MinIO 服务端点（内网）
 	MinioPublicEndpoint string // MinIO 公网访问端点
@@ -57,10 +56,9 @@ func InitConfig() *Config {
 	v.SetDefault("REDIS_ADDR", "6379")
 	v.SetDefault("REDIS_PASSWORD", "")
 	v.SetDefault("REDIS_DB", "0")
-	v.SetDefault("REDIS_TIMEOUT", 7)
 	//JWT
 	v.SetDefault("JWT_SECRET", "likebili-secret-key")
-	v.SetDefault("JWT_EXPIRE", 72)
+	v.SetDefault("TOKEN_TTL_DAYS", 7)
 	//MinIO
 	v.SetDefault("MINIO_ENDPOINT", "192.168.11.100:9000")
 	v.SetDefault("MINIO_PUBLIC_ENDPOINT", "192.168.11.100:9000")
@@ -99,7 +97,7 @@ func InitConfig() *Config {
 		RedisPassword:       v.GetString("REDIS_PASSWORD"),
 		RedisDB:             v.GetInt("REDIS_DB"),
 		JWTSecret:           v.GetString("JWT_SECRET"),
-		JWTExpire:           v.GetInt("JWT_EXPIRE"),
+		TokenTTLDays:        v.GetInt("TOKEN_TTL_DAYS"),
 		MinioEndpoint:       v.GetString("MINIO_ENDPOINT"),
 		MinioPublicEndpoint: v.GetString("MINIO_PUBLIC_ENDPOINT"),
 		MinioAccessKey:      v.GetString("MINIO_ACCESS_KEY"),

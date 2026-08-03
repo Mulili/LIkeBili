@@ -17,20 +17,20 @@ type UserClaims struct {
 
 // JWT 封装签名密钥和过期配置，避免每次调用都传入 secret。
 type JWT struct {
-	secret      []byte // HMAC 签名密钥
-	expireHours int    // Token 过期时间（小时）
+	secret []byte        // HMAC 签名密钥
+	expire time.Duration // Token 过期时长
 }
 
 // New 创建 JWT 实例，注入一次配置即可复用。
-func New(secret string, expireHours int) *JWT {
+func New(secret string, expire time.Duration) *JWT {
 	return &JWT{
-		secret:      []byte(secret),
-		expireHours: expireHours,
+		secret: []byte(secret),
+		expire: expire,
 	}
 }
 
 // GenerateToken 为用户生成签名的 JWT Token 字符串。
-// Token 包含用户 ID、用户名、角色，有效期由构造时传入的 expireHours 决定。
+// Token 包含用户 ID、用户名、角色，有效期由构造时传入的 expire 决定。
 func (j *JWT) GenerateToken(userID uint, username string, role uint8) (string, error) {
 	//构造载荷，生成标准字段表示由谁签发token，以及到期时间和起始时间
 	claims := &UserClaims{
@@ -39,9 +39,9 @@ func (j *JWT) GenerateToken(userID uint, username string, role uint8) (string, e
 		Role:     role,
 		//标准字段
 		RegisteredClaims: jwtlib.RegisteredClaims{
-			Issuer:    "LikeBili",                                                                      //token由谁签发
-			ExpiresAt: jwtlib.NewNumericDate(time.Now().Add(time.Duration(j.expireHours) * time.Hour)), //token过期时间
-			IssuedAt:  jwtlib.NewNumericDate(time.Now()),                                               //token何时签发
+			Issuer:    "LikeBili",                                      //token由谁签发
+			ExpiresAt: jwtlib.NewNumericDate(time.Now().Add(j.expire)), //token过期时间
+			IssuedAt:  jwtlib.NewNumericDate(time.Now()),               //token何时签发
 		},
 	}
 	//使用HS256
