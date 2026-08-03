@@ -8,6 +8,8 @@ type Error struct {
 	Err     error  // 内部原始 error（可选，用于日志）
 }
 
+// Error 实现 error 接口，使 *Error 能被 fmt.Errorf("%w", ...) 挂入错误链，
+// 也能被 errors.As 从错误链中提取出来。这是整个 codeErrors 错误体系能工作的前提。
 func (e *Error) Error() string {
 	return e.Message
 }
@@ -23,12 +25,14 @@ const (
 	Internal        = 500
 	TooManyRequests = 429
 	//auth状态码
-	CodeUsernameExists        = 10001
-	CodeEmailExists           = 10002
-	CodeUserNotFound          = 10003
-	CodeWrongPassword         = 10004
-	CodePasswordsNotMatch     = 10005
-	CodeUserIsBan             = 10006
+	CodeUsernameExists    = 10001
+	CodeEmailExists       = 10002
+	CodeUserNotFound      = 10003
+	CodeWrongPassword     = 10004
+	CodePasswordsNotMatch = 10005
+	CodeUserIsBan         = 10006
+	// 并发注册时，用户名/邮箱的预检查存在竞态窗口，最终由数据库唯一索引兜底。
+	// 命中后统一返回该错误，不区分具体是哪个字段重复。
 	CodeUsernameOrEmailExists = 10007
 	CodeInternal              = 50000
 	//favorite状态码
@@ -41,17 +45,18 @@ const (
 )
 
 var (
-	ErrUsernameExists        = &Error{Code: CodeUsernameExists, Message: "用户名已存在"}
-	ErrEmailExists           = &Error{Code: CodeEmailExists, Message: "邮箱已被注册"}
-	ErrUserNotFound          = &Error{Code: CodeUserNotFound, Message: "用户不存在"}
-	ErrWrongPassword         = &Error{Code: CodeWrongPassword, Message: "密码错误"}
-	ErrPasswordsNotMatch     = &Error{Code: CodePasswordsNotMatch, Message: "两次密码不一致"}
-	ErrFavoriteNotFound      = &Error{Code: CodeFavoriteNotFound, Message: "收藏夹不存在"}
-	ErrFavoriteForbidden     = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
-	ErrTokenInvalid          = &Error{Code: CodeTokenInvalid, Message: "令牌无效"}
-	ErrTokenExpired          = &Error{Code: CodeTokenExpired, Message: "令牌已过期"}
-	ErrUnauthorized          = &Error{Code: CodeUnauthorized, Message: "未授权，请先登录"}
-	ErrCodeUserIsBan         = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
+	ErrUsernameExists    = &Error{Code: CodeUsernameExists, Message: "用户名已存在"}
+	ErrEmailExists       = &Error{Code: CodeEmailExists, Message: "邮箱已被注册"}
+	ErrUserNotFound      = &Error{Code: CodeUserNotFound, Message: "用户不存在"}
+	ErrWrongPassword     = &Error{Code: CodeWrongPassword, Message: "密码错误"}
+	ErrPasswordsNotMatch = &Error{Code: CodePasswordsNotMatch, Message: "两次密码不一致"}
+	ErrFavoriteNotFound  = &Error{Code: CodeFavoriteNotFound, Message: "收藏夹不存在"}
+	ErrFavoriteForbidden = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
+	ErrTokenInvalid      = &Error{Code: CodeTokenInvalid, Message: "令牌无效"}
+	ErrTokenExpired      = &Error{Code: CodeTokenExpired, Message: "令牌已过期"}
+	ErrUnauthorized      = &Error{Code: CodeUnauthorized, Message: "未授权，请先登录"}
+	ErrCodeUserIsBan     = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
+	// 注册竞态兜底错误：并发注册时唯一索引冲突（MySQL 1062）统一返回该错误
 	ErrUsernameOrEmailExists = &Error{Code: CodeUsernameOrEmailExists, Message: "用户名或邮箱重复"}
 )
 
