@@ -185,6 +185,14 @@ func (s *Service) Login(c context.Context, account, password string) (*usermodel
 	return resp, token, nil
 }
 
+func (s *Service) Logout(c context.Context, userID uint) error {
+	rdbkey := fmt.Sprintf("auth:token:%d", userID)
+	if err := s.rdb.Del(c, rdbkey).Err(); err != nil {
+		return fmt.Errorf("Method:auth.service.Logout: %w", err)
+	}
+	return nil
+}
+
 // FindMe 获取当前登录用户的详细信息。
 // userid 由 JWT 鉴权中间件从 Token 中解析后传入，返回用户主页所需的信息。
 // 若用户设置了头像（存的是对象名），会通过对象存储转换为可访问的 URL 后返回。

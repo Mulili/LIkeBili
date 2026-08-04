@@ -34,6 +34,7 @@ const (
 	// 并发注册时，用户名/邮箱的预检查存在竞态窗口，最终由数据库唯一索引兜底。
 	// 命中后统一返回该错误，不区分具体是哪个字段重复。
 	CodeUsernameOrEmailExists = 10007
+	CodeInvalid               = 10008
 	CodeInternal              = 50000
 	//favorite状态码
 	CodeFavoriteNotFound  = 60001
@@ -58,6 +59,16 @@ var (
 	ErrCodeUserIsBan     = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
 	// 注册竞态兜底错误：并发注册时唯一索引冲突（MySQL 1062）统一返回该错误
 	ErrUsernameOrEmailExists = &Error{Code: CodeUsernameOrEmailExists, Message: "用户名或邮箱重复"}
+	ErrCodeInvalid           = &Error{Code: CodeInvalid, Message: "输入的参数无法校验"}
+	// ---- HTTP 层标准状态码对应的默认提示 ----
+	// 命名用 Error 前缀，避免与上方业务哨兵（如 ErrUnauthorized）重名。
+	ErrorBadRequest      = &Error{Code: BadRequest, Message: "请求参数错误"}
+	ErrorUnauthorized    = &Error{Code: Unauthorized, Message: "未授权，请先登录"}
+	ErrorForbidden       = &Error{Code: Forbidden, Message: "无权限访问"}
+	ErrorNotFound        = &Error{Code: NotFound, Message: "资源不存在"}
+	ErrorConflict        = &Error{Code: Conflict, Message: "资源冲突"}
+	ErrorInternal        = &Error{Code: Internal, Message: "服务器内部错误"}
+	ErrorTooManyRequests = &Error{Code: TooManyRequests, Message: "请求过于频繁，请稍后再试"}
 )
 
 // 创建纯业务错误（不包裹内部 error）

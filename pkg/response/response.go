@@ -3,9 +3,12 @@
 package response
 
 import (
+	codeErrors "LikeBili/pkg/errors"
+	"LikeBili/pkg/logger"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // Response 统一响应体。
@@ -75,4 +78,51 @@ func ErrorWithRequestID(c *gin.Context, httpstatus, code int, message, requestID
 		Message:   message,
 		RequestID: requestID,
 	})
+}
+
+// ErrorFrom 将任意 error 统一翻译为错误响应并写出。
+// 内部用 codeErrors.From 从错误链中提取业务错误；提取不到（如 GORM/Redis 原始错误）时
+// 兜底为"服务器内部错误"（50000 + HTTP 500）。
+// 用法：Handler 遇到错误时一行调用即可，无需再写 errors.As 分支。
+func ErrorFrom(c *gin.Context, operation string, err error) {
+	if bizErr, ok := codeErrors.From(err); ok {
+		Error(c, httpStatusForCode(bizErr.Code), bizErr.Code, bizErr.Message)
+		return
+	}
+	//结构化
+	logger.Error("operation failed", zap.String("operation", operation), zap.Error(err))
+	Error(c, http.StatusInternalServerError, codeErrors.CodeInternal, "服务器内部错误")
+}
+
+// httpStatusForCode 将业务错误码映射为 HTTP 状态码。
+// 采用逐条枚举：每个错误码都由其业务语义决定对应的 HTTP 状态，
+// 因此以后新增错误码时，记得在这里补一条 case，否则会落入 default（500）。
+func httpStatusForCode(code int) int {
+	switch code {
+	// ---- 注册/登录类（1xxxx）----
+	// 冲突：数据已存在（用户名/邮箱重复，含并发注册竞态兜底）
+	case codeErrors.CodeUsernameExists, codeErrors.CodeEmailExists, codeErrors.CodeUsernameOrEmailExists:
+		return http.StatusConflict
+	// 请求的内容无法通过校验：密码错误 / 两次密码不一致 / 参数校验失败
+	case codeErrors.CodeWrongPassword, codeErrors.CodePasswordsNotMatch, codeErrors.CodeInvalid:
+		return http.StatusBadRequest
+	case codeErrors.CodeUserNotFound:
+		return http.StatusNotFound
+	case codeErrors.CodeUserIsBan:
+		return http.StatusForbidden
+	// ---- JWT 类（2xxxx）：未认证 ----
+	case codeErrors.CodeTokenInvalid, codeErrors.CodeTokenExpired, codeErrors.CodeUnauthorized:
+		return http.StatusUnauthorized
+	// ---- 服务器内部错误（5xxxx）----
+	case codeErrors.CodeInternal:
+		return http.StatusInternalServerError
+	// ---- 收藏夹类（6xxxx）----
+	case codeErrors.CodeFavoriteNotFound:
+		return http.StatusNotFound
+	case codeErrors.CodeFavoriteForbidden:
+		return http.StatusForbidden
+	// ---- 未知错误码：保守按服务器错误处理 ----
+	default:
+		return http.StatusInternalServerError
+	}
 }
