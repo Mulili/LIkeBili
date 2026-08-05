@@ -35,6 +35,7 @@ const (
 	// 命中后统一返回该错误，不区分具体是哪个字段重复。
 	CodeUsernameOrEmailExists = 10007
 	CodeInvalid               = 10008
+	CodeForbidden             = 10009
 	CodeInternal              = 50000
 	//favorite状态码
 	CodeFavoriteNotFound  = 60001
@@ -64,7 +65,7 @@ var (
 	// 命名用 Error 前缀，避免与上方业务哨兵（如 ErrUnauthorized）重名。
 	ErrorBadRequest      = &Error{Code: BadRequest, Message: "请求参数错误"}
 	ErrorUnauthorized    = &Error{Code: Unauthorized, Message: "未授权，请先登录"}
-	ErrorForbidden       = &Error{Code: Forbidden, Message: "无权限访问"}
+	ErrCodeForbidden     = &Error{Code: CodeForbidden, Message: "无权限执行该操作"}
 	ErrorNotFound        = &Error{Code: NotFound, Message: "资源不存在"}
 	ErrorConflict        = &Error{Code: Conflict, Message: "资源冲突"}
 	ErrorInternal        = &Error{Code: Internal, Message: "服务器内部错误"}

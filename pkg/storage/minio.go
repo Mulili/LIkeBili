@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"LikeBili/pkg/config"
@@ -259,4 +260,21 @@ func (m *MinIO) UploadVideo(ctx context.Context, objectName string, reader io.Re
 		return fmt.Errorf("failed to upload file to minio: %w", err)
 	}
 	return nil
+}
+
+// URL 把对象名（objKey）转换为可公开访问的完整 URL。
+// 这是"判断是否为空 + GetObjectURL"的复用方法，调用方无需再写 if != "" 判断。
+// 兼容两种输入：
+//   - objKey（如 "avatar/1.jpg"）：走 GetObjectURL 拼接完整 URL
+//   - 已是完整 URL（以 http:// 或 https:// 开头）：原样返回，避免二次包装成畸形 URL
+//
+// 空字符串直接返回空字符串。
+func (m *MinIO) URL(objectKey string) string {
+	if objectKey == "" {
+		return ""
+	}
+	if strings.HasPrefix(objectKey, "http://") || strings.HasPrefix(objectKey, "https://") {
+		return objectKey
+	}
+	return m.GetObjectURL(objectKey)
 }

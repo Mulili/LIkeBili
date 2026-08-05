@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,25 +27,25 @@ func CSRF(cfg CSRFConfig) gin.HandlerFunc {
 				c.Next()
 				return
 			}
-			csrfHeader := c.GetHeader("X-CSRF-Token")
-			if csrfHeader == "" {
-				response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 缺失")
-				c.Abort()
-				return
-			}
-			csrfCokie, err := c.Cookie("csrf_token")
-			if csrfCokie == "" || err != nil {
-				response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF cookie 缺失")
-				c.Abort()
-				return
-			}
-			if !strings.EqualFold(csrfHeader, csrfCokie) {
-				response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 不匹配")
-				c.Abort()
-				return
-			}
-			c.Next()
 		}
+		csrfHeader := c.GetHeader("X-CSRF-Token")
+		if csrfHeader == "" {
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 缺失")
+			c.Abort()
+			return
+		}
+		csrfCookie, err := c.Cookie("csrf_token")
+		if csrfCookie == "" || err != nil {
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF cookie 缺失")
+			c.Abort()
+			return
+		}
+		if csrfHeader != csrfCookie {
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 不匹配")
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 

@@ -17,10 +17,10 @@ type LoginReq struct {
 }
 
 //修改个人主页
+//注意：头像不在这里修改，换头像请走 UploadAvatar 接口（该接口是头像唯一的写入入口）
 type UpdateProfileReq struct {
 	Nickname *string `json:"nickname" validate:"omitempty,min=2,max=32"`
 	Bio      *string `json:"bio" validate:"omitempty,min=0,max=512"`
-	Avatar   *string `json:"avatar" validate:"omitempty,url,max=256"` //表示更换头像，如果没传值就不执行，传值判断是否符合url的格式
 }
 
 //===============Response=============

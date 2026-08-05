@@ -121,10 +121,7 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 		})
 	}
 
-	userAvatar := ""
-	if user.Avatar != "" {
-		userAvatar = s.storage.GetObjectURL(user.Avatar)
-	}
+	userAvatar := s.storage.URL(user.Avatar)
 
 	// ---------- 第八步：组装响应返回 ----------
 	resp := &usermodel.LoginResp{
@@ -172,10 +169,7 @@ func (s *Service) Login(c context.Context, account, password string) (*usermodel
 	if err := s.rdb.Set(c, rdbkey, token, s.tokenTTL).Err(); err != nil {
 		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.Wrap(err, codeErrors.CodeInternal, "服务器繁忙,请稍后重试"))
 	}
-	userAvatar := ""
-	if user.Avatar != "" {
-		userAvatar = s.storage.GetObjectURL(user.Avatar)
-	}
+	userAvatar := s.storage.URL(user.Avatar)
 	resp := &usermodel.LoginResp{
 		ID:       user.ID,
 		Username: user.Username,
@@ -204,10 +198,7 @@ func (s *Service) FindMe(c context.Context, userid uint) (*usermodel.UserInfoRes
 	if user == nil {
 		return nil, fmt.Errorf("Method:auth.service.FindMe: %w", codeErrors.ErrUserNotFound)
 	}
-	userAvatar := ""
-	if user.Avatar != "" {
-		userAvatar = s.storage.GetObjectURL(user.Avatar)
-	}
+	userAvatar := s.storage.URL(user.Avatar)
 	resp := &usermodel.UserInfoResp{
 		ID:        user.ID,
 		Username:  user.Username,

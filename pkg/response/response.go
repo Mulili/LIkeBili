@@ -108,7 +108,7 @@ func httpStatusForCode(code int) int {
 		return http.StatusBadRequest
 	case codeErrors.CodeUserNotFound:
 		return http.StatusNotFound
-	case codeErrors.CodeUserIsBan:
+	case codeErrors.CodeUserIsBan, codeErrors.CodeForbidden:
 		return http.StatusForbidden
 	// ---- JWT 类（2xxxx）：未认证 ----
 	case codeErrors.CodeTokenInvalid, codeErrors.CodeTokenExpired, codeErrors.CodeUnauthorized:

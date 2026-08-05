@@ -166,9 +166,7 @@ func (s *Service) GetFavoriteDetail(c context.Context, userID, favoriteid uint, 
 				Avatar:   avatar,
 			}
 		}
-		if videoResp.CoverURL != "" {
-			items[i].CoverURL = s.storage.GetObjectURL(videoResp.CoverURL)
-		}
+		items[i].CoverURL = s.storage.URL(videoResp.CoverURL)
 	}
 
 	return &modelsFavorites.FavoriteDetailResp{
