@@ -1,0 +1,33 @@
+# ==================== 配置模板（提交到仓库） ====================
+# 使用方法：复制本文件为 config.yml，按你的环境填写真实值。
+# 敏感项（密码/密钥）不要提交真实值，只提交本模板。
+#
+# 所有配置项都可用同名环境变量覆盖（viper AutomaticEnv）：
+#   SERVER_PORT / DB_HOST / DB_PASSWORD / REDIS_PASSWORD / MINIO_SECRET_KEY / JWT_SECRET ...
+
+ServerName: LikeBiliStation
+ServerPort: ":8080"
+
+DBHost: "127.0.0.1"
+DBPort: "3306"
+DBUser: "root"
+DBPassword: "your_mysql_password"
+DBName: "likebili"
+MaxIdleConns: 10
+MaxOpenConns: 100
+ConnMaxLifetime: 3600
+
+RedisHost: "127.0.0.1"
+RedisAddr: 6379
+RedisPassword: "your_redis_password"
+RedisDB: 0
+
+JWTSecret: "change_me_to_a_long_random_string"
+TokenTTLDays: 7
+
+MinioEndpoint: "127.0.0.1:9000"
+MinioPublicEndpoint: "127.0.0.1:9000"
+MinioAccessKey: "minioadmin"
+MinioSecretKey: "change_me_minio_secret"
+MinioBucket: "likebili"
+MinioUseSSL: "false"

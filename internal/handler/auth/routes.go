@@ -26,7 +26,7 @@ func RegisterRoutes(rg *gin.RouterGroup, rdb *redis.Client, db *gorm.DB, jwt *jw
 	h := NewHandler(svc, tokenTTL)                                          // 3. HTTP 处理层
 
 	// 注册路由：path 相对于路由组（如 /api/v1），注册、登录、刷新已在 CSRF 豁免列表中
-	auth := rg.Group("auth")
+	auth := rg.Group("/auth")
 	{
 		//不登录也能使用的功能
 		auth.POST("/register", h.Register)

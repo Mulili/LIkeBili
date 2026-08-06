@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	extracttoken "LikeBili/pkg/ExtractToken"
 	codeErrors "LikeBili/pkg/errors"
+	extracttoken "LikeBili/pkg/extracttoken"
 	jwtlib "LikeBili/pkg/jwt"
 	"LikeBili/pkg/response"
 

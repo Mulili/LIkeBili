@@ -1,21 +1,41 @@
 package main
 
 import (
+	authhandler "LikeBili/internal/handler/auth"
+	userhandler "LikeBili/internal/handler/user"
 	"LikeBili/internal/middleware"
+	modelsFavorites "LikeBili/internal/models/favorites"
+	modelsUser "LikeBili/internal/models/user"
+	favRepo "LikeBili/internal/repository/favorites"
 	"LikeBili/pkg/config"
 	"LikeBili/pkg/database"
+	jwtlib "LikeBili/pkg/jwt"
+	"LikeBili/pkg/storage"
+	"LikeBili/pkg/validator"
+	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
 	cfg := config.InitConfig()
+	if err := validator.Init(); err != nil {
+		log.Fatalf("validator failed: %v", err)
+	}
 	db := database.InitMySQL(cfg)
-	// rdb := database.InitRedis(cfg)
+	rdb := database.InitRedis(cfg)
+	minio, err := storage.New(cfg)
+	if err != nil {
+		log.Fatalf("minio failed: %v", err)
+	}
+	tokenTTL := time.Duration(cfg.TokenTTLDays) * 24 * time.Hour
+	jwtSvc := jwtlib.New(cfg.JWTSecret, tokenTTL)
+	favrepo := favRepo.NewRepository(db)
+
 	r := gin.Default()
-	//显式传入CSRF
+	r.Use(middleware.CORS())
 	api := r.Group("api/v1")
-	//显式传入CSRF豁免路径
 	api.Use(middleware.CSRF(middleware.CSRFConfig{
 		PublicPaths: []string{
 			"/api/v1/auth/register",
@@ -23,6 +43,12 @@ func main() {
 			"/api/v1/auth/refresh",
 		},
 	}))
-	db.AutoMigrate()
+	db.AutoMigrate(
+		&modelsUser.User{},
+		&modelsFavorites.Favorites{},
+	)
+	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo)
+	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
+
 	r.Run(cfg.ServerPort)
 }

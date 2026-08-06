@@ -23,6 +23,9 @@ Thumbs.db
 # Dependency
 vendor/
 
+# Config（真实配置不入库，避免泄露密码/密钥）
+pkg/config/config.yml
+
 # Other
 辅助.md
 README.md

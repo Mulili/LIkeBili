@@ -1,5 +1,5 @@
 ServerName: LikeBiliStation
-ServerPort: 8080
+ServerPort: ":8080"
 
 DBHost: "127.0.0.1"
 DBPort: "721"
@@ -10,9 +10,9 @@ MaxIdleConns: 10
 MaxOpenConns: 100
 ConnMaxLifetime: 3600
 
-RedisHost: "localhost"
+RedisHost: "192.168.11.100"
 RedisAddr: 6379
-RedisPassword: ""
+RedisPassword: "123456"
 RedisDB: 0
 
 JWTSecret: "likebili-secret-key"

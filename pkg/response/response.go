@@ -113,6 +113,16 @@ func httpStatusForCode(code int) int {
 	// ---- JWT 类（2xxxx）：未认证 ----
 	case codeErrors.CodeTokenInvalid, codeErrors.CodeTokenExpired, codeErrors.CodeUnauthorized:
 		return http.StatusUnauthorized
+	// ---- 文件字节流类（3xxxx）----
+	// 文件过大 → 413 Payload Too Large（语义最贴切）
+	case codeErrors.CodeFileTooLarge:
+		return http.StatusRequestEntityTooLarge
+	// 格式不支持 / 文件为空 / 数量超限 → 请求本身不合法
+	case codeErrors.CodeFileFormatInvalid, codeErrors.CodeFileEmpty, codeErrors.CodeFileTooMany:
+		return http.StatusBadRequest
+	// 写入对象存储失败 → 基础设施故障
+	case codeErrors.CodeFileUploadFailed:
+		return http.StatusInternalServerError
 	// ---- 服务器内部错误（5xxxx）----
 	case codeErrors.CodeInternal:
 		return http.StatusInternalServerError

@@ -37,13 +37,19 @@ const (
 	CodeInvalid               = 10008
 	CodeForbidden             = 10009
 	CodeInternal              = 50000
-	//favorite状态码
-	CodeFavoriteNotFound  = 60001
-	CodeFavoriteForbidden = 60002
 	//JWT状态码
 	CodeTokenInvalid = 20001
 	CodeTokenExpired = 20002
 	CodeUnauthorized = 20003
+	//文件字节流状态码
+	CodeFileTooLarge      = 30001 // 文件大小超过限制
+	CodeFileFormatInvalid = 30002 // 文件格式/类型不支持
+	CodeFileEmpty         = 30003 // 文件内容为空
+	CodeFileTooMany       = 30004 // 上传的文件数量超过限制
+	CodeFileUploadFailed  = 30005 // 文件写入对象存储失败
+	//favorite状态码
+	CodeFavoriteNotFound  = 60001
+	CodeFavoriteForbidden = 60002
 )
 
 var (
@@ -61,6 +67,12 @@ var (
 	// 注册竞态兜底错误：并发注册时唯一索引冲突（MySQL 1062）统一返回该错误
 	ErrUsernameOrEmailExists = &Error{Code: CodeUsernameOrEmailExists, Message: "用户名或邮箱重复"}
 	ErrCodeInvalid           = &Error{Code: CodeInvalid, Message: "输入的参数无法校验"}
+	// ---- 文件字节流类（3xxxx）----
+	ErrCodeFileTooLarge      = &Error{Code: CodeFileTooLarge, Message: "文件大小超过限制"}
+	ErrCodeFileFormatInvalid = &Error{Code: CodeFileFormatInvalid, Message: "不支持的文件格式"}
+	ErrCodeFileEmpty         = &Error{Code: CodeFileEmpty, Message: "文件内容为空"}
+	ErrCodeFileTooMany       = &Error{Code: CodeFileTooMany, Message: "上传的文件数量超过限制"}
+	ErrCodeFileUploadFailed  = &Error{Code: CodeFileUploadFailed, Message: "文件上传失败"}
 	// ---- HTTP 层标准状态码对应的默认提示 ----
 	// 命名用 Error 前缀，避免与上方业务哨兵（如 ErrUnauthorized）重名。
 	ErrorBadRequest      = &Error{Code: BadRequest, Message: "请求参数错误"}

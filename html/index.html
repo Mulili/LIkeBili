@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LikeBili API 测试面板</title>
+  <!--
+    LikeBili 后端接口测试面板（纯 HTML + 原生 JS，零依赖）。
+
+    使用前提：
+      1. 后端已启动（go run ./server，默认监听 :8080），且 MySQL / Redis / MinIO 在线
+      2. 本页面建议通过静态服务器打开（保持 localhost 同站），例如：
+           python -m http.server 5500   → 打开 http://localhost:5500/html/
+        或 npx serve 等其他静态服务器。
+         不要用 file:// 双击打开：跨源下浏览器会拦截读取响应（CORS），
+         且 SameSite=Lax 的 Cookie（csrf_token）在跨站时不会携带，写请求会 403。
+      3. 前端页面端口与后端 8080 是"同站不同源"：localhost:5500 → localhost:8080 能带 Cookie，
+         但响应读取是跨域（不同端口=不同 origin），若浏览器拦截，需要在后端加 CORS 中间件
+         或把本目录挂到 Go 服务里同源访问。
+  -->
+  <style>
+    body { font-family: "Microsoft YaHei", sans-serif; margin: 20px; background: #f6f8fa; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 16px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    section { background: #fff; border: 1px solid #e1e4e8; border-radius: 6px; padding: 12px 16px; margin-bottom: 16px; }
+    input { margin: 2px 6px 2px 0; padding: 4px 6px; width: 180px; }
+    button { margin: 2px 4px 2px 0; padding: 4px 10px; cursor: pointer; }
+    .tip { background: #fff8e1; border: 1px solid #ffe082; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
+    .status { font-family: monospace; font-size: 13px; margin-bottom: 12px; }
+    #log { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; font-family: Consolas, monospace; font-size: 13px;
+           white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; }
+    .ok { color: #4caf50; } .err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <h1>LikeBili API 测试面板</h1>
+
+  <div class="tip">
+    <b>使用说明：</b>先点【获取CSRF】拿到 CSRF token（写请求必需，否则 403）。登录/注册成功即写入登录 Cookie（HttpOnly），
+    面板自动记录登录状态并填充当前用户 ID；认证由浏览器自动携带 Cookie，无需手动保存 token。页面必须通过 localhost 端口打开（不要 file:// 双击），详见 HTML 头部注释。
+  </div>
+
+  <div class="status">
+    API 地址：<input id="base" value="http://localhost:8080/api/v1" style="width:280px">
+    <button onclick="applyBase()">应用</button><br>
+    登录状态：<span id="tokenStatus" style="color:#1976d2">（未登录）</span><br>
+    CSRF Token：<span id="csrfStatus" style="color:#e65100">（未获取）</span>
+  </div>
+
+  <!-- ==================== 认证模块 ==================== -->
+  <section>
+    <h2>认证模块 /auth</h2>
+    <div>
+      注册：用户名 <input id="regUsername" placeholder="username"> 邮箱 <input id="regEmail" placeholder="email">
+      密码 <input id="regPassword" placeholder="password">
+      <button onclick="doRegister()">注册</button>
+    </div>
+    <div style="margin-top:8px">
+      登录：账号 <input id="loginAccount" placeholder="用户名或邮箱"> 密码 <input id="loginPassword" placeholder="password">
+      <button onclick="doLogin()">登录</button>
+      <button onclick="doCSRF()">获取CSRF</button>
+      <button onclick="doRefresh()">刷新Token</button>
+      <button onclick="doLogout()">登出</button>
+      <button onclick="doMe()">我的信息 /auth/me</button>
+    </div>
+  </section>
+
+  <!-- ==================== 用户模块 ==================== -->
+  <section>
+    <h2>用户模块 /users</h2>
+    <div>
+      用户 ID <input id="uid" value="1" placeholder="用户ID">
+      <button onclick="doGetUser()">查用户</button>
+      <button onclick="doUpdateUser()">改资料(自己)</button>
+    </div>
+    <div style="margin-top:8px">
+      新昵称 <input id="nickname" placeholder="nickname"> 新简介 <input id="bio" placeholder="bio">
+      <input id="avatarFile" type="file" accept="image/*">
+      <button onclick="doUploadAvatar()">上传头像(自己)</button>
+    </div>
+  </section>
+
+  <!-- ==================== 日志面板 ==================== -->
+  <section>
+    <h2>响应日志</h2>
+    <button onclick="clearLog()">清空</button>
+    <div id="log">等待操作...</div>
+  </section>
+
+<script>
+// ==================== 全局状态 ====================
+let BASE = document.getElementById("base").value;
+let csrfToken = ""; // CSRF header 值（从 /auth/csrf 响应中提取）
+
+// 登录状态存 localStorage（只存 id/username 供展示与填充；token 本身在 HttpOnly Cookie 中，JS 不可读）
+const USER_KEY = "likebili_user";
+function getUser() {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || "null"); } catch { return null; }
+}
+function setUser(u) {
+  if (u && u.id) {
+    localStorage.setItem(USER_KEY, JSON.stringify({ id: u.id, username: u.username }));
+    document.getElementById("uid").value = u.id; // 自动填当前用户 id，避免改到别人的资料/头像
+    document.getElementById("tokenStatus").textContent = "已登录：" + u.username;
+  } else {
+    localStorage.removeItem(USER_KEY);
+    document.getElementById("tokenStatus").textContent = "（未登录）";
+  }
+}
+function applyBase() {
+  BASE = document.getElementById("base").value.replace(/\/+$/, ""); // 去掉末尾斜杠
+  log("INFO", `API 地址已切换为：${BASE}`);
+}
+
+// ==================== 请求封装 ====================
+// 统一处理：CSRF header（写请求）、JSON/FormData 序列化、响应解析；认证走 Cookie
+async function request(method, path, { body, formData } = {}) {
+  const headers = {};
+  // 认证依赖 HttpOnly 登录 Cookie（配合上面的 credentials:"include" 跨源携带），无需手动加 Authorization
+  // CSRF 校验只拦写请求（中间件里 GET 直接放行），所以只有非 GET 才带 header
+  if (method !== "GET") headers["X-CSRF-Token"] = csrfToken;
+
+  // credentials:"include" 必须显式开启：前端(5500)与后端(8080)是跨源，默认不会携带/保存 Cookie
+  const opts = { method, headers, credentials: "include" };
+  if (formData) {
+    opts.body = formData; // multipart：让浏览器自动生成 boundary 和 Content-Type，不要手动设
+  } else if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+
+  let res;
+  try {
+    res = await fetch(BASE + path, opts);
+  } catch (e) {
+    // 网络层失败：通常是 CORS 拦截或后端没启动
+    log("ERROR", `${method} ${path} 网络错误：${e.message}\n→ 检查后端是否启动、是否跨域被拦`);
+    return null;
+  }
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data };
+}
+
+// 输出到日志面板，按 HTTP 状态码染色
+function log(method, text) {
+  const box = document.getElementById("log");
+  const cls = method === "ERROR" ? "err" : (method === "OK" ? "ok" : "");
+  const line = `[${new Date().toLocaleTimeString()}] ${method}  ${text}`;
+  box.innerHTML = (box.innerHTML === "等待操作..." ? "" : box.innerHTML) +
+    `<div class="${cls}">${line.replace(/</g, "&lt;")}</div>`;
+  box.scrollTop = box.scrollHeight;
+}
+function clearLog() {
+  document.getElementById("log").innerHTML = "等待操作...";
+}
+// 展示一次请求结果：绿色=2xx，红色=其他
+function showResult(method, path, r) {
+  if (!r) return;
+  const color = r.status >= 200 && r.status < 300 ? "OK" : "ERROR";
+  log(color, `${method} ${path} → HTTP ${r.status}\n${JSON.stringify(r.data, null, 2)}`);
+}
+
+// ==================== 认证模块功能 ====================
+async function doRegister() {
+  const body = {
+    username: document.getElementById("regUsername").value,
+    email: document.getElementById("regEmail").value,
+    password: document.getElementById("regPassword").value,
+  };
+  const r = await request("POST", "/auth/register", { body });
+  showResult("POST", "/auth/register", r);
+  // 注册即登录：后端已写入登录 Cookie，这里同步面板状态
+  if (r && r.status >= 200 && r.status < 300 && r.data && r.data.data) {
+    setUser(r.data.data);
+    log("OK", "注册成功，已自动登录");
+  }
+}
+
+async function doLogin() {
+  const body = {
+    account: document.getElementById("loginAccount").value,
+    password: document.getElementById("loginPassword").value,
+  };
+  const r = await request("POST", "/auth/login", { body });
+  showResult("POST", "/auth/login", r);
+  if (r && r.status >= 200 && r.status < 300 && r.data && r.data.data) {
+    setUser(r.data.data);
+    log("OK", "登录成功");
+  }
+}
+
+async function doCSRF() {
+  // GET 请求，中间件直接放行，不需要 header
+  const r = await request("GET", "/auth/csrf");
+  showResult("GET", "/auth/csrf", r);
+  if (r && r.data && typeof r.data.data === "string") {
+    csrfToken = r.data.data; // 响应结构：{code, message, data: "<token>"}
+    document.getElementById("csrfStatus").textContent = csrfToken.slice(0, 20) + "...";
+    log("OK", "已保存 CSRF token（浏览器也已自动存下 csrf_token Cookie）");
+  }
+}
+
+async function doRefresh() {
+  const r = await request("POST", "/auth/refresh"); // 旧 token 从 HttpOnly 登录 Cookie 自动带
+  showResult("POST", "/auth/refresh", r);
+  if (r && r.status >= 200 && r.status < 300) {
+    log("OK", "已刷新登录态（登录 Cookie 已更新）");
+  }
+}
+
+async function doLogout() {
+  const r = await request("POST", "/auth/logout");
+  showResult("POST", "/auth/logout", r);
+  if (r && r.status >= 200 && r.status < 300) {
+    setUser(null); // 后端已清登录 Cookie + Redis token，同步面板状态
+    log("OK", "已登出");
+  }
+}
+
+async function doMe() {
+  const r = await request("GET", "/auth/me");
+  showResult("GET", "/auth/me", r);
+}
+
+// ==================== 用户模块功能 ====================
+function uid() { return document.getElementById("uid").value; }
+
+async function doGetUser() {
+  const r = await request("GET", `/users/${uid()}`); // 公开接口
+  showResult("GET", `/users/${uid()}`, r);
+}
+
+async function doUpdateUser() {
+  const body = {
+    nickname: document.getElementById("nickname").value || null, // null = 不修改
+    bio: document.getElementById("bio").value || null,
+  };
+  const r = await request("PUT", `/users/${uid()}`, { body });
+  showResult("PUT", `/users/${uid()}`, r);
+}
+
+async function doUploadAvatar() {
+  const fileInput = document.getElementById("avatarFile");
+  if (!fileInput.files || !fileInput.files[0]) {
+    log("ERROR", "请先选择图片文件");
+    return;
+  }
+  const fd = new FormData();
+  fd.append("avatar", fileInput.files[0]); // 字段名必须与后端 FormFile("avatar") 一致
+  const r = await request("POST", `/users/${uid()}/avatar`, { formData: fd });
+  showResult("POST", `/users/${uid()}/avatar`, r);
+}
+
+// ==================== 页面初始化 ====================
+// 刷新页面时：从 Cookie 恢复 CSRF 状态，并用 /auth/me 校准真实登录状态（登录 Cookie 在刷新后依然有效）
+(async function init() {
+  const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  if (m) {
+    csrfToken = m[1];
+    document.getElementById("csrfStatus").textContent = csrfToken.slice(0, 20) + "...（已从Cookie恢复）";
+  }
+  const r = await request("GET", "/auth/me");
+  if (r && r.status === 200 && r.data && r.data.data) {
+    setUser(r.data.data);
+  } else if (r && r.status >= 400) {
+    setUser(null); // 401 等 → 已登出/未登录
+  }
+  // 网络异常（r 为 null）时保持现状，不误清本地记录
+})();
+</script>
+</body>
+</html>

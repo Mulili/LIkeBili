@@ -30,18 +30,18 @@ func CSRF(cfg CSRFConfig) gin.HandlerFunc {
 		}
 		csrfHeader := c.GetHeader("X-CSRF-Token")
 		if csrfHeader == "" {
-			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 缺失")
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 缺失,当前用户无权限")
 			c.Abort()
 			return
 		}
 		csrfCookie, err := c.Cookie("csrf_token")
 		if csrfCookie == "" || err != nil {
-			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF cookie 缺失")
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF cookie 缺失,当前用户无权限")
 			c.Abort()
 			return
 		}
 		if csrfHeader != csrfCookie {
-			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 不匹配")
+			response.Error(c, http.StatusForbidden, codeErrors.Forbidden, "CSRF token 不匹配,当前用户无权限")
 			c.Abort()
 			return
 		}

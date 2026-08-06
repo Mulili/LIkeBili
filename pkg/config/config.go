@@ -41,10 +41,10 @@ func InitConfig() *Config {
 	//默认情况（部署环境）
 	//启动项
 	v.SetDefault("SERVER_NAME", "LikeBiliStation")
-	v.SetDefault("SERVER_PORT", "8080")
+	v.SetDefault("SERVER_PORT", ":8080")
 	//数据库Mysql
 	v.SetDefault("DB_HOST", "127.0.0.1")
-	v.SetDefault("DB_PORT", "721")
+	v.SetDefault("DB_PORT", "0721")
 	v.SetDefault("DB_USER", "root")
 	v.SetDefault("DB_PASSWORD", "123456")
 	v.SetDefault("DB_NAME", "likebili")
@@ -52,9 +52,9 @@ func InitConfig() *Config {
 	v.SetDefault("MAX_OPEN_CONNS", 100)
 	v.SetDefault("CONN_MAX_LIFETIME", 3600)
 	//Redis
-	v.SetDefault("REDIS_HOST", "localhost")
+	v.SetDefault("REDIS_HOST", "192.168.11.100")
 	v.SetDefault("REDIS_ADDR", "6379")
-	v.SetDefault("REDIS_PASSWORD", "")
+	v.SetDefault("REDIS_PASSWORD", "123456")
 	v.SetDefault("REDIS_DB", "0")
 	//JWT
 	v.SetDefault("JWT_SECRET", "likebili-secret-key")
@@ -71,11 +71,11 @@ func InitConfig() *Config {
 	//配置文件后缀
 	v.SetConfigType("yaml")
 	//配置文件地址
-	v.AddConfigPath("./config")
+	v.AddConfigPath("./pkg/config")
 
 	v.AutomaticEnv()
 	//读取配置文件
-	if err := viper.ReadInConfig(); err != nil {
+	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			log.Printf("Warning: config file error: %v", err)
 		}
