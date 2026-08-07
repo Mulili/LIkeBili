@@ -5,6 +5,9 @@ import (
 	userhandler "LikeBili/internal/handler/user"
 	"LikeBili/internal/middleware"
 	modelsFavorites "LikeBili/internal/models/favorites"
+	modelsMeta "LikeBili/internal/models/meta"
+	modelsQuality "LikeBili/internal/models/quality"
+	modelsTrans "LikeBili/internal/models/transcode"
 	modelsUser "LikeBili/internal/models/user"
 	favRepo "LikeBili/internal/repository/favorites"
 	"LikeBili/pkg/config"
@@ -46,6 +49,9 @@ func main() {
 	db.AutoMigrate(
 		&modelsUser.User{},
 		&modelsFavorites.Favorites{},
+		&modelsTrans.TranscodeTask{},
+		&modelsMeta.VideoMeta{},
+		&modelsQuality.VideoQuality{},
 	)
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
