@@ -1,16 +1,27 @@
 // Package transcode 提供视频转码的后台任务处理功能。
-// 负责：从 MinIO 下载原始视频 → ffprobe 提取元信息 → ffmpeg 生成 HLS 多码率分片
-// → 分片上传回 MinIO → 自动截封面 → 通过 ProgressBroker 实时推送进度。
+//
+// 完整流水线（谁调用谁，一眼看清）：
+//
+//	上传落库 → ProcessVideo（本包唯一入口，由 main.go 注入闭包以 goroutine 调用）
+//	          ├─ st.GetPresignedURL（pkg/storage）→ 拿到临时下载链接
+//	          ├─ downloadFile           → 源视频拉到本地 /tmp/transcode/{videoID}/
+//	          ├─ runFFProbe             → 元信息落 video_metas（saveMeta）
+//	          ├─ runFFmpegHLS ×N档       → 每档 HLS 分片，编码进度经回调传回
+//	          ├─ uploadFileToMinio ×N   → m3u8+ts 分片传回 MinIO
+//	          ├─ saveQuality ×N档       → 档位信息落 video_qualities
+//	          └─ runFFmpegCover（可选）  → 无封面时自动截第 1 秒为封面
+//	所有状态变化统一走 publishAndPersist / failTask：写 transcode_tasks 表 + broker 广播。
 //
 // 进度模型（总体 0-100）：
 //
-//	下载 2% → ffprobe 10% → 每个清晰度档位各占 (90-10)/档位数 的区间 → 100% 完成
+//	下载 2% → ffprobe 10% → 每个档位均分 10~90 的区间 → 100% 完成
 package transcode
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,11 +43,14 @@ import (
 )
 
 // transDir 是转码过程中本地临时文件的存放目录。
+// 何时使用：源视频、各档 HLS 分片、封面图都先落在这里，上传完 MinIO 后整体清理。
+// 按视频 ID 分子目录（见 ProcessVideo），并发转码互不覆盖。
 // 注意：Windows 上绝对路径 /tmp/transcode 会解析到当前盘符根目录的 tmp 下，
 // 部署到 Linux 时就是标准的 /tmp/transcode。务必保证该目录存在且有写权限。
 const transDir = "/tmp/transcode"
 
 // transcodeTargets 定义了需要转码的目标分辨率档位（从低到高）。
+// 何时使用：ProcessVideo 筛选档位时遍历它，筛掉分辨率高于源视频的档位（转码不放大）。
 // 只读数据：slice 无法声明为 const，约定只遍历、不得修改。
 var transcodeTargets = []struct {
 	Label  string
@@ -49,9 +63,18 @@ var transcodeTargets = []struct {
 	{"1080p", 1920, 1080},
 }
 
-// ProcessVideo 是视频转码的主入口函数，通常由 goroutine 异步调用。
-// 流程：查视频 → 预签名下载 → ffprobe → 多码率 HLS 转码 → 分片上传 → 自动封面。
-// 任一步致命错误都会 failTask：更新数据库状态为失败 + broker 广播失败，然后提前返回。
+// ProcessVideo 视频转码主入口：一条完整流水线
+// 查视频 → 预签名URL下载 → ffprobe 探测 → 多档 HLS 转码 → 分片上传 → 自动封面 → 完成。
+// 任一步致命错误都会调 failTask：DB 置失败 + broker 广播失败后提前返回。
+//
+// 何时调用：上传视频落库后，由 main.go 注入的闭包包装并以 goroutine 异步调用
+// （触发链：service.UploadVideo → triggerTranscode → transcodeLocal → 闭包 → 本函数）。
+//
+// 参数来源：
+//   - videoID: 刚入库的 videos.id（repo.Create 后返回的自增 ID）
+//   - db:      main.go 的全局 *gorm.DB，读写 transcode_tasks / video_metas / video_qualities / videos 四张表
+//   - broker:  main.go 创建的全局 *ProgressBroker，把进度实时推给订阅者（前端）
+//   - st:      main.go 创建的 *storage.MinIO，负责预签名URL下载与分片/封面上传
 func ProcessVideo(videoID uint, db *gorm.DB, broker *ProgressBroker, st *storage.MinIO) {
 	// 整个转码最多跑 30 分钟；ctx 传给所有网络/命令调用，超时会自动取消
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -191,7 +214,12 @@ func ProcessVideo(videoID uint, db *gorm.DB, broker *ProgressBroker, st *storage
 		// 把该档位的 m3u8 + 所有 ts 分片上传到 MinIO，路径规则：
 		//   videos/{videoID}/{档位}/index.m3u8
 		//   videos/{videoID}/{档位}/seg_000.ts ...
-		entries, _ := os.ReadDir(qualityDir)
+		entries, err := os.ReadDir(qualityDir)
+		if err != nil {
+			// 目录读不出来 = 该档产物不可用：不上传、不落库，避免产生"有记录无文件"的脏档位
+			logger.Error("读取档位目录失败，跳过该档", zap.Uint("video_id", videoID), zap.String("dir", qualityDir), zap.Error(err))
+			continue
+		}
 		var totalSize uint64
 		for _, entry := range entries {
 			if entry.IsDir() {
@@ -199,11 +227,13 @@ func ProcessVideo(videoID uint, db *gorm.DB, broker *ProgressBroker, st *storage
 			}
 			localPath := filepath.Join(qualityDir, entry.Name())
 			minioObj := fmt.Sprintf("videos/%d/%s/%s", videoID, target.Label, entry.Name())
-			info, _ := entry.Info()
-			var fileSize int64
-			if info != nil {
-				fileSize = info.Size()
+			info, err := entry.Info()
+			if err != nil {
+				// 单个文件信息都拿不到，上传没有意义，跳过该文件继续下一个
+				logger.Warn("读取文件信息失败，跳过该文件", zap.String("file", localPath), zap.Error(err))
+				continue
 			}
+			fileSize := info.Size()
 			if err := uploadFileToMinio(ctx, st, localPath, minioObj, fileSize); err != nil {
 				logger.Error("上传分片失败", zap.String("obj", minioObj), zap.Error(err))
 			}
@@ -251,6 +281,10 @@ func ProcessVideo(videoID uint, db *gorm.DB, broker *ProgressBroker, st *storage
 
 // publishAndPersist 把转码状态同时写入数据库并广播给订阅者。
 // 这是保证"数据库记录"与"实时推送"一致性的便捷方法，避免各处重复写这两步。
+//
+// 何时调用：ProcessVideo 各阶段结束时（探测完成10%、每档完成、最终100%）。
+// 参数来源：status/progress 是调用方规划好的总体进度值（与包注释的进度模型对应），
+// errMsg 成功时传 ""，失败信息由 failTask 单独处理。
 func publishAndPersist(db *gorm.DB, broker *ProgressBroker, ctx context.Context, videoID uint, status uint8, progress uint8, errMsg string) {
 	updateStatus(db, ctx, videoID, status, progress, errMsg)
 	broker.Publish(ProgressUpdate{
@@ -263,9 +297,12 @@ func publishAndPersist(db *gorm.DB, broker *ProgressBroker, ctx context.Context,
 
 // updateStatus 更新（或创建）transcode_tasks 表中的任务状态记录。
 // 以 video_id 为准：记录不存在则创建，存在则更新状态、进度、错误信息。
+//
+// 何时调用：本包唯一的落库公共点，被 publishAndPersist 和 failTask 调用（ProcessVideo 不直接碰它）。
+// 参数来源：videoID 来自 ProcessVideo 的入参；status/progress/errMsg 由调用方传入。
 func updateStatus(db *gorm.DB, ctx context.Context, videoID uint, status uint8, progress uint8, errMsg string) {
 	existing := &modelsTrans.TranscodeTask{}
-	if err := db.WithContext(ctx).Where("video_id = ?", videoID).First(existing).Error; err != nil {
+	if err := db.WithContext(ctx).Where("video_id = ?", videoID).First(existing).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		// 记录不存在 → 创建新任务（视频ID唯一索引保证不会重复）
 		db.WithContext(ctx).Create(&modelsTrans.TranscodeTask{
 			VideoID:    videoID,
@@ -273,6 +310,9 @@ func updateStatus(db *gorm.DB, ctx context.Context, videoID uint, status uint8, 
 			Progress:   progress,
 			ErrMessage: errMsg,
 		})
+		return
+	} else if err != nil {
+		logger.Error("无法连接到数据库", zap.Uint("video_id", videoID), zap.Error(err))
 		return
 	}
 	// 记录已存在 → 只更新这三个业务字段（不碰 ID/时间）
@@ -284,16 +324,22 @@ func updateStatus(db *gorm.DB, ctx context.Context, videoID uint, status uint8, 
 	})
 }
 
-// failTask 标记转码任务失败：更新数据库 + 广播失败状态。
-// 转码流程中的"致命错误"统一走这里，保证数据库和实时推送都看到失败。
+// failTask 标记转码任务失败：记日志 + 更新数据库 + 广播失败状态。
+//
+// 何时调用：ProcessVideo 里任何致命错误提前 return 前（ffmpeg/ffprobe 缺失、
+// 预签名URL生成失败、下载失败等）。
+// 参数来源：videoID/ctx/db/broker 透传 ProcessVideo 的入参；errMsg 是调用方拼好的失败描述。
 func failTask(db *gorm.DB, broker *ProgressBroker, ctx context.Context, videoID uint, errMsg string) {
 	logger.Error("转码失败", zap.Uint("video_id", videoID), zap.String("error", errMsg))
 	updateStatus(db, ctx, videoID, modelsTrans.StatusFailed, 0, errMsg)
 	broker.Publish(ProgressUpdate{VideoID: videoID, Status: modelsTrans.StatusFailed, Progress: 0, ErrorMsg: errMsg})
 }
 
-// saveMeta 持久化视频元信息到 video_metas 表。
-// 以 video_id 为准：已存在则更新，不存在则创建（一个视频至多一条元信息）。
+// saveMeta 持久化视频元信息到 video_metas 表（一个视频至多一条）。
+// 以 video_id 为准：已存在则更新，不存在则创建。
+//
+// 何时调用：ProcessVideo 在 ffprobe 成功时调用（ffprobe 失败会跳过，走默认分辨率兜底）。
+// 参数来源：videoID 透传 ProcessVideo 入参；meta 来自 runFFProbe 的返回值。
 func saveMeta(db *gorm.DB, ctx context.Context, videoID uint, meta *modelsMeta.VideoMeta) {
 	var count int64
 	db.WithContext(ctx).Model(&modelsMeta.VideoMeta{}).Where("video_id = ?", videoID).Count(&count)
@@ -313,8 +359,14 @@ func saveMeta(db *gorm.DB, ctx context.Context, videoID uint, meta *modelsMeta.V
 	db.WithContext(ctx).Create(meta)
 }
 
-// saveQuality 持久化单个清晰度档位的转码产物信息到 video_qualities 表。
-// 包括 object_name（MinIO 中 m3u8 的路径）和 file_size（该档位所有分片的总大小）。
+// saveQuality 持久化单个清晰度档位的转码产物信息到 video_qualities 表（一档一条）。
+// 记录 object_name（MinIO 中 m3u8 的路径）和 file_size（该档所有分片总大小）。
+//
+// 何时调用：ProcessVideo 每转完一个档位、分片全部上传完后调用。
+// 参数来源：
+//   - quality: 档位标签（如 "720p"，来自 transcodeTargets 或兜底档位）
+//   - objectName: 本档 m3u8 的对象名 videos/{videoID}/{档位}/index.m3u8
+//   - fileSize: 本档所有分片大小的累加（前端展示该档体积用）
 func saveQuality(db *gorm.DB, ctx context.Context, videoID uint, quality string, objectName string, fileSize uint64) {
 	var count int64
 	db.WithContext(ctx).Model(&modelsQuality.VideoQuality{}).
@@ -340,12 +392,14 @@ func saveQuality(db *gorm.DB, ctx context.Context, videoID uint, quality string,
 }
 
 // ffprobeOutput 是 ffprobe JSON 输出的顶层结构。
+// 何时使用：runFFProbe 用 json.Unmarshal 把 ffprobe 的 stdout 解析成该结构，再提取字段。
 type ffprobeOutput struct {
 	Streams []ffprobeStream `json:"streams"`
 	Format  ffprobeFormat   `json:"format"`
 }
 
 // ffprobeStream 表示 ffprobe 返回的一条流信息（视频/音频/字幕等）。
+// 一个视频通常有视频流 + 音频流多条，runFFProbe 只取 codec_type == "video" 的那条。
 type ffprobeStream struct {
 	CodecType string `json:"codec_type"`
 	CodecName string `json:"codec_name"`
@@ -353,7 +407,7 @@ type ffprobeStream struct {
 	Height    int    `json:"height"`
 }
 
-// ffprobeFormat 表示 ffprobe 返回的容器格式信息。
+// ffprobeFormat 表示 ffprobe 返回的容器格式信息（整个文件的时长与总码率）。
 type ffprobeFormat struct {
 	Duration string `json:"duration"`
 	BitRate  string `json:"bit_rate"`
@@ -361,6 +415,10 @@ type ffprobeFormat struct {
 
 // runFFProbe 调用 ffprobe 提取视频元信息（时长、分辨率、编码、码率）。
 // 用 JSON 输出格式解析，避免人工解析文本。
+//
+// 何时调用：ProcessVideo 下载完源视频后调用一次，拿到"源视频的体检报告"。
+// 参数来源：inputFile 是下载到本地的源视频路径（ProcessVideo 里拼的 /tmp/transcode/{id}/input.mp4）。
+// 返回值：*VideoMeta 一方面传给 saveMeta 落库，另一方面 Width/Height 决定"转哪些档位"（转码不放大）。
 func runFFProbe(inputFile string) (*modelsMeta.VideoMeta, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet", // 抑制日志输出
@@ -400,6 +458,15 @@ func runFFProbe(inputFile string) (*modelsMeta.VideoMeta, error) {
 // runFFmpegHLS 调用 ffmpeg 把输入视频转码为 HLS 分片（m3u8 + ts）。
 // 通过 -progress pipe:1 让 ffmpeg 把进度写到 stdout，逐行解析 out_time
 // 换算成 0-100% 的编码进度，实时回调 onProgress。
+//
+// 何时调用：ProcessVideo 的主循环里每个档位调一次，同步阻塞直到该档转完（见循环内调用点）。
+// 参数来源：
+//   - inputFile: 本地源视频路径（所有档位共用同一个）
+//   - outputM3U8 / segPattern: ProcessVideo 按档位目录拼好的路径
+//     （/tmp/transcode/{id}/{档位}/index.m3u8 与 seg_%03d.ts 模板）
+//   - width/height: 该档目标分辨率（来自 transcodeTargets 或兜底档位）
+//   - duration: ffprobe 得到的源视频时长（秒），仅用于把 out_time 换算成百分比
+//   - onProgress: 上层传入的闭包，ffmpeg 每报一次进度就调用它（把编码进度映射到总体进度并广播）
 func runFFmpegHLS(ctx context.Context, inputFile, outputM3U8, segPattern string, width, height int, duration float64, onProgress func(pct float64)) error {
 	scaleFilter := fmt.Sprintf("scale=%d:%d", width, height)
 
@@ -477,6 +544,9 @@ func runFFmpegHLS(ctx context.Context, inputFile, outputM3U8, segPattern string,
 
 // parseTimeToSeconds 把 ffmpeg 的 "HH:MM:SS.microseconds" 时间戳转成浮点秒数。
 // 形如 "00:01:23.456789"，解析失败时返回 0（调用方会忽略 0 值进度）。
+//
+// 何时调用：仅被 runFFmpegHLS 的扫描协程调用，解析每行 out_time= 的值。
+// 参数来源：ts 是 stdout 里 out_time= 后面的原始字符串（去掉微秒部分后按 : 拆分）。
 func parseTimeToSeconds(ts string) float64 {
 	hms := strings.SplitN(ts, ".", 2)[0] // 去掉微秒部分
 	parts := strings.Split(hms, ":")
@@ -490,6 +560,9 @@ func parseTimeToSeconds(ts string) float64 {
 }
 
 // runFFmpegCover 从输入视频的第 1 秒截取一帧作为封面图（jpg）。
+//
+// 何时调用：ProcessVideo 在视频没有封面时调用（cover_url 为空才触发，不覆盖用户手动传的封面）。
+// 参数来源：inputFile 是本地源视频；outputFile 是封面临时路径（转完后上传 MinIO 再删除）。
 func runFFmpegCover(ctx context.Context, inputFile, outputFile string) error {
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-i", inputFile,
@@ -511,6 +584,10 @@ func runFFmpegCover(ctx context.Context, inputFile, outputFile string) error {
 }
 
 // downloadFile 通过 HTTP GET 把远程文件下载到本地路径（支持上下文取消）。
+//
+// 何时调用：ProcessVideo 生成预签名 URL 后调用，把源视频从 MinIO 拉到本地磁盘
+// （ffmpeg 只能读本地文件路径，不能直接吃 HTTP 流，所以必须落盘）。
+// 参数来源：url 是 st.GetPresignedURL 的返回值（带签名的临时链接）；destPath 是本地目标路径。
 func downloadFile(ctx context.Context, url, destPath string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -539,6 +616,11 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 // 根据文件扩展名自动设置正确的 Content-Type（HLS 相关类型前端播放器依赖）。
 // 注意：storage 客户端必须通过参数传入（不能直接访问 ProcessVideo 里的 st，
 // 那是另一个函数的局部变量），这就是为什么第一个参数是 st *storage.MinIO。
+//
+// 何时调用：ProcessVideo 每转完一档，遍历档位目录把 m3u8+ts 逐个上传；
+// 自动封面提取成功后也用它上传封面图。
+// 参数来源：localPath 是本地文件路径；objectName 是 MinIO 对象名
+// （如 videos/{id}/{档位}/seg_000.ts）；fileSize 是该文件字节数（来自 os.FileInfo）。
 func uploadFileToMinio(ctx context.Context, st *storage.MinIO, localPath, objectName string, fileSize int64) error {
 	f, err := os.Open(localPath)
 	if err != nil {

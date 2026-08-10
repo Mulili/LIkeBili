@@ -25,9 +25,9 @@ func (TranscodeTask) TableName() string {
 }
 
 // 转码任务状态枚举。
-// 注意：全部统一为 int8，与上面 Status 字段的类型一致。
-// 如果混用（比如 StatusDone 是 uint），`task.Status = StatusDone` 会因
-// "uint 不能直接赋给 int8"而编译报错——typed 常量不像字面量会自动转换。
+// 注意：全部统一为 uint8，与上面 Status 字段的类型一致。
+// 如果混用（比如 StatusDone 是 int），`task.Status = StatusDone` 会因
+// "int 不能直接赋给 uint8"而编译报错——typed 常量不像字面量会自动转换。
 const (
 	StatusPending   uint8 = 0 // 待处理：任务已创建，还没开始转码
 	StatusTranscode uint8 = 1 // 转码中：worker 正在跑 FFmpeg
