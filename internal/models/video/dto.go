@@ -18,7 +18,7 @@ type UpdateVideoReq struct {
 	Title       *string `json:"title" validate:"omitempty,max=64"`
 	Description *string `json:"description" validate:"omitempty,max=2048"`
 	CategoryID  *uint32 `json:"category_id"`
-	Status      *int8   `json:"status"`
+	ViewStatus  *uint8  `json:"status" validate:"oneof=1 2"`
 }
 
 // 上传时，显示进度
@@ -34,7 +34,6 @@ type VideoResp struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	CoverURL    string    `json:"cover_url"`
-	VideoURL    string    `json:"video_url"`
 	Duration    uint      `json:"duration"`
 	FileSize    uint64    `json:"file_size"`
 	CategoryID  uint32    `json:"category_id"` //类型id，建立索引，否则如果以后查找某一个类型就得全表查询

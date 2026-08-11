@@ -16,8 +16,9 @@ type Video struct {
 	VideoURL    string         `gorm:"type:varchar(512);not null" json:"video_url"`
 	Duration    uint           `gorm:"default:0" json:"duration"`
 	FileSize    uint64         `gorm:"default:0" json:"file_size"`
-	CategoryID  uint32         `gorm:"index;default:0" json:"category_id"`   //类型id，建立索引，否则如果以后查找某一个类型就得全表查询
-	Status      uint8          `gorm:"type:tinyint;default:1" json:"status"` //视频状态：1待审核2审核成功3审核失败4隐藏
+	CategoryID  uint32         `gorm:"index;default:0" json:"category_id"`       //类型id，建立索引，否则如果以后查找某一个类型就得全表查询
+	Status      uint8          `gorm:"type:tinyint;default:1" json:"status"`     //视频状态：1待审核2审核成功3审核失败
+	ViewStatus  *uint8         `gorm:"type:tinyint;defalt:1" json:"view_status"` //1公开，2私密,可视状态，用于用户自己决定视频仅自己可见还是公开
 	Views       uint32         `gorm:"default:0" json:"views"`
 	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`

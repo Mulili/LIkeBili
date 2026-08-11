@@ -1,7 +1,8 @@
 package video
 
 import (
-	videomodel "LikeBili/internal/models/video"
+	"LikeBili/internal/models/transcode"
+	modelsVideo "LikeBili/internal/models/video"
 	"context"
 	"fmt"
 
@@ -20,7 +21,7 @@ func NewRepository(db *gorm.DB) *Repository {
 
 // CRUD
 // 增加video，将video的信息通过指针传入上下文写入到数据库之中
-func (r *Repository) Create(c context.Context, video *videomodel.Video) error {
+func (r *Repository) Create(c context.Context, video *modelsVideo.Video) error {
 	result := r.db.WithContext(c).Create(video)
 	if result.Error != nil {
 		//使用%w可以判断错误类型
@@ -30,8 +31,8 @@ func (r *Repository) Create(c context.Context, video *videomodel.Video) error {
 }
 
 // 根据videoid查找video
-func (r *Repository) FindByID(c context.Context, id uint) (*videomodel.Video, error) {
-	var video videomodel.Video
+func (r *Repository) FindByID(c context.Context, id uint) (*modelsVideo.Video, error) {
+	var video modelsVideo.Video
 	//先First找到主键id为当前id的第一个视频，然后通过Preload将User关联表一起查询随后一起返回
 	result := r.db.WithContext(c).Preload("User").First(&video, id)
 	if result.Error != nil {
@@ -46,7 +47,7 @@ func (r *Repository) FindByID(c context.Context, id uint) (*videomodel.Video, er
 }
 
 // 更新视频字段
-func (r *Repository) Update(c context.Context, video *videomodel.Video) error {
+func (r *Repository) Update(c context.Context, video *modelsVideo.Video) error {
 	/*
 		注意，Save方法将进行全量更新，任何更改或未更改的条目都会被更新
 		这意味着如果你如果不曾更改类似category，也会因为使用Save方法，
@@ -60,11 +61,11 @@ func (r *Repository) Update(c context.Context, video *videomodel.Video) error {
 }
 
 // 批量查找视频
-func (r *Repository) FindList(c context.Context, page, pageSize uint, categoryId uint) ([]videomodel.Video, int64, error) {
-	var videos []videomodel.Video
+func (r *Repository) FindList(c context.Context, page, pageSize uint, categoryId uint) ([]modelsVideo.Video, int64, error) {
+	var videos []modelsVideo.Video
 	var total int64
-	//将所有status=1（审核通过）的视频查找出来。
-	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("status = ?", 1)
+	// 审核通过（status=2）且公开（view_status=1）的视频才进入公开列表
+	query := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("status = ?", 2).Where("view_status = ?", 1)
 	//如果category不为0则根据传入的类型进行查找，否则查找全表
 	if categoryId > 0 {
 		query = query.Where("category_id = ?", categoryId)
@@ -85,11 +86,11 @@ func (r *Repository) FindList(c context.Context, page, pageSize uint, categoryId
 }
 
 // 查询用户视频
-func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8) ([]videomodel.Video, int64, error) {
-	var videos []videomodel.Video
+func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8) ([]modelsVideo.Video, int64, error) {
+	var videos []modelsVideo.Video
 	var total int64
 
-	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("user_id = ?", userid)
+	query := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("user_id = ?", userid)
 
 	//若是传参则使用传入的参数进行判断
 	if status != nil {
@@ -112,11 +113,11 @@ func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSi
 }
 
 // 按状态查询视频
-func (r *Repository) ListByStatus(c context.Context, page, pageSize int, status uint8) ([]videomodel.Video, int64, error) {
-	var videos []videomodel.Video
+func (r *Repository) ListByStatus(c context.Context, page, pageSize int, status uint8) ([]modelsVideo.Video, int64, error) {
+	var videos []modelsVideo.Video
 	var total int64
 	//按状态查询，status为必填项
-	query := r.db.WithContext(c).Model(&videomodel.Video{}).Where("status = ?", status)
+	query := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("status = ?", status)
 	//统计
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("Method:video.repository.ListByStatus: %w", err)
@@ -131,9 +132,9 @@ func (r *Repository) ListByStatus(c context.Context, page, pageSize int, status 
 
 // 查询审核通过的公共视频
 // 用于全站排行榜或订阅推送
-func (r *Repository) ListPublic(ctx context.Context) ([]videomodel.Video, error) {
-	var videos []videomodel.Video
-	result := r.db.WithContext(ctx).Preload("User").Where("status = ?", 1).Find(&videos)
+func (r *Repository) ListPublic(ctx context.Context) ([]modelsVideo.Video, error) {
+	var videos []modelsVideo.Video
+	result := r.db.WithContext(ctx).Preload("User").Where("status = ?", 2).Where("view_status = ?", 1).Find(&videos)
 	if result.Error != nil {
 		return nil, fmt.Errorf("Method:video.repository.ListPublic: %w", result.Error)
 	}
@@ -142,7 +143,7 @@ func (r *Repository) ListPublic(ctx context.Context) ([]videomodel.Video, error)
 
 // 更新视频时长，用于异步上传视频
 func (r *Repository) UpdateDuration(c context.Context, videoid uint, duration uint) error {
-	result := r.db.WithContext(c).Model(&videomodel.Video{}).Where("ID = ? and duration = 0").Update("duration", duration) //仅在时长为0时修改
+	result := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("ID = ? and duration = 0").Update("duration", duration) //仅在时长为0时修改
 	if result.Error != nil {
 		return fmt.Errorf("Method:video.repository.UpdateDuration: %w", result.Error)
 	}
@@ -152,11 +153,35 @@ func (r *Repository) UpdateDuration(c context.Context, videoid uint, duration ui
 // 增加播放量
 func (r *Repository) IncrementViews(c context.Context, videoID uint) error {
 	if err := r.db.WithContext(c).
-		Model(&videomodel.Video{}).
+		Model(&modelsVideo.Video{}).
 		Where("id = ?", videoID).
 		UpdateColumn("views", gorm.Expr("views + 1")). //利用mysql的InnoDB实现行锁，秒级并发10000
 		Error; err != nil {
 		return fmt.Errorf("Method:video.repository.IncrementViews: %w", err)
+	}
+	return nil
+}
+
+// 发布视频前检查是否转码
+func (r *Repository) FindTask(c context.Context, videoID uint) (*transcode.TranscodeTask, error) {
+	var task transcode.TranscodeTask
+	if err := r.db.WithContext(c).
+		Model(&transcode.TranscodeTask{}).
+		Where("video_id = ?", videoID).
+		First(&task).
+		Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("Method:video.repository.FindTask: %w", err)
+	}
+	return &task, nil
+}
+
+// 删除video(软删除)
+func (r *Repository) DeleteVideo(c context.Context, video *modelsVideo.Video) error {
+	if err := r.db.WithContext(c).Delete(video).Error; err != nil {
+		return fmt.Errorf("Method:video.repository.DeleteVideo: %w", err)
 	}
 	return nil
 }

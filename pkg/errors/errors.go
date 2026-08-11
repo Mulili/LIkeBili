@@ -47,6 +47,14 @@ const (
 	CodeFileEmpty         = 30003 // 文件内容为空
 	CodeFileTooMany       = 30004 // 上传的文件数量超过限制
 	CodeFileUploadFailed  = 30005 // 文件写入对象存储失败
+	//video状态码
+	CodeVideoNotFound        = 40001
+	CodeVideoForbidden       = 40002
+	CodeVideoStatusForbidden = 40003
+	CodeVideoTransFailed     = 40004
+	CodeVideoTransNotReady   = 40005
+	CodeVideoNotPass         = 40006
+	CodeTaskNotFound         = 40007
 	//favorite状态码
 	CodeFavoriteNotFound  = 60001
 	CodeFavoriteForbidden = 60002
@@ -73,6 +81,14 @@ var (
 	ErrCodeFileEmpty         = &Error{Code: CodeFileEmpty, Message: "文件内容为空"}
 	ErrCodeFileTooMany       = &Error{Code: CodeFileTooMany, Message: "上传的文件数量超过限制"}
 	ErrCodeFileUploadFailed  = &Error{Code: CodeFileUploadFailed, Message: "文件上传失败"}
+	// ---- 视频类（4xxxx）----
+	ErrVideoNotFound        = &Error{Code: CodeVideoNotFound, Message: "视频不存在"}
+	ErrVideoForbidden       = &Error{Code: CodeVideoForbidden, Message: "无权访问该视频"}
+	ErrVideoStatusForbidden = &Error{Code: CodeVideoStatusForbidden, Message: "非管理员无权通过审核"}
+	ErrVideoTransFailed     = &Error{Code: CodeVideoTransFailed, Message: "视频转码失败,请重新上传"}
+	ErrVideoTransNotReady   = &Error{Code: CodeVideoTransNotReady, Message: "视频转码尚未完成,请稍后重试"}
+	ErrVideoNotPass         = &Error{Code: CodeVideoNotPass, Message: "未审核通过的视频"}
+	ErrTaskNotFound         = &Error{Code: CodeTaskNotFound, Message: "未查询到转码状态"}
 	// ---- HTTP 层标准状态码对应的默认提示 ----
 	// 命名用 Error 前缀，避免与上方业务哨兵（如 ErrUnauthorized）重名。
 	ErrorBadRequest      = &Error{Code: BadRequest, Message: "请求参数错误"}
