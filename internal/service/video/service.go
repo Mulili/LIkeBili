@@ -7,11 +7,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
+	"sort"
+	"strconv"
 	"time"
 
 	"LikeBili/internal/models/transcode"
 	modelsVideo "LikeBili/internal/models/video"
 	rpvideo "LikeBili/internal/repository/video"
+	"LikeBili/internal/service/rank"
 	codeErrors "LikeBili/pkg/errors"
 	"LikeBili/pkg/logger"
 	"LikeBili/pkg/storage"
@@ -27,6 +31,7 @@ type Service struct {
 	rdb     *redis.Client            // Redis 客户端（预留）
 	storage *storage.MinIO           // 对象存储客户端
 	toresp  *toresp.VideoRespBuilder // 视频响应 DTO 转换器（跨模块统一出口，构造时注入）
+	rank    *rank.Service
 
 	// transcodePublisher 可选旁路依赖：转码任务发布者（如 MQ）。
 	// nil = 未接入 MQ，走进程内降级转码（transcodeLocal）。
@@ -65,8 +70,8 @@ func WithTranscodeRunner(fn func(videoID uint)) Option {
 }
 
 // NewService 构造 Service。必传依赖走位置参数，可选依赖走 Option。
-func NewService(repo *rpvideo.Repository, rdb *redis.Client, storage *storage.MinIO, toresp *toresp.VideoRespBuilder, opts ...Option) *Service {
-	s := &Service{repo: repo, rdb: rdb, storage: storage, toresp: toresp}
+func NewService(repo *rpvideo.Repository, rdb *redis.Client, storage *storage.MinIO, toresp *toresp.VideoRespBuilder, rank *rank.Service, opts ...Option) *Service {
+	s := &Service{repo: repo, rdb: rdb, storage: storage, toresp: toresp, rank: rank}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -123,17 +128,31 @@ func (s *Service) UploadVideo(c context.Context, input *UploadVideoInput) (*mode
 	// DTO 不含播放地址（Status=1 未转码完，前端点播放走 GetPresignedUrl 现签）
 	return s.toresp.ToVideoResp(video), nil
 }
+
+// GetVideo 获取视频详情（读操作）。
+// 校验与 GetPresignedUrl 一致：视频必须存在且可见（Status=2 公开，或作者本人可看）。
+// 顺带做两件事：① 播放量 +1（DB，失败不阻塞，只记日志）；② 热度埋点（rank.Incr，播放权重）。
+// 封面/头像由 toresp 统一拼公开 URL；播放地址由 GetPresignedUrl 现签，DTO 不含。
 func (s *Service) GetVideo(c context.Context, videoID, userID uint) (*modelsVideo.VideoResp, error) {
+	// ① 读前置校验：视频必须存在，且对当前用户可见。
+	// 非作者时要求 status=2（过审）且非私密；作者本人始终可见（含待审核/私密）。
 	video, err := s.FindVideoAndForbidden(c, videoID, userID)
 	if err != nil {
 		return nil, err
 	}
+	// ② 播放量落库 +1：统计性数据，DB 失败不阻塞详情返回，只记日志容忍丢失
 	if err := s.repo.IncrementViews(c, videoID); err != nil {
 		logger.Warn("自增播放量失败", zap.Uint("video_id", videoID), zap.Error(err))
 	}
+	// ③ 内存态 Views+1：让本次响应里的播放量立刻 +1，省一次回查 DB
 	video.Views++
-
-	// 封面/头像由 toresp 统一拼公开 URL，播放地址由 GetPresignedUrl 现签
+	// ④ 热度埋点：把本次播放投递到 rank 服务（Redis 当天桶 +1.5 分），供日/周/月榜使用。
+	// Redis 抖动失败同样不阻塞主流程，只记日志。
+	if err := s.rank.Incr(c, videoID, rank.DeltaViews); err != nil {
+		logger.Warn("热度埋点失败", zap.Uint("video_id", videoID), zap.Error(err))
+	}
+	// ⑤ 转 DTO：封面/头像由 toresp 统一拼公开 URL；
+	// 播放地址故意不出现在 DTO 里（防爬），前端点播放时另行请求 GetPresignedUrl 现签
 	return s.toresp.ToVideoResp(video), nil
 }
 
@@ -217,7 +236,7 @@ func (s *Service) UpdateVideo(c context.Context, videoID, userID uint, upReq *mo
 	return s.toresp.ToVideoResp(video), nil
 }
 
-// ===========================下一步制作删除minio的内容
+// 软删除视频
 func (s *Service) DeleteVideo(c context.Context, videoID, userID uint) error {
 	video, err := s.AssessVideoAndAuthor(c, videoID, userID)
 	if err != nil {
@@ -228,6 +247,167 @@ func (s *Service) DeleteVideo(c context.Context, videoID, userID uint) error {
 	}
 	return nil
 }
+
+// ListPagePublicVideo 分页获取公开视频列表（首页/分类页）。
+// 查询条件：status=2（审核通过）+ view_status=1（公开）；categoryID 为 0 时不过滤分类。
+// 分页约束：page 最小 1，pageSize 限制在 1~50（默认 16）。
+// 返回 ListVideo：items 已由 toresp 拼好封面/头像公开 URL。
+func (s *Service) ListPagePublicVideo(c context.Context, page, pageSize uint, categoryID uint) (*modelsVideo.ListVideo, error) {
+	// ① 分页参数防御：page 最小 1；pageSize 越界（<1 或 >50）回退默认 16。
+	// 上限 50 是防超大页拖垮 DB 查询，默认 16 是首页常规一屏数量。
+	if page < 1 {
+		page = 1
+	}
+	if pageSize > 50 || pageSize < 1 {
+		pageSize = 16
+	}
+	// ② 查询公开视频列表：repo 层已过滤 status=2（审核通过）+ view_status=1（公开）；
+	// categoryID=0 表示不过滤分类（首页全量）；total 是满足条件的总条数，供前端算总页数。
+	videos, total, err := s.repo.FindList(c, page, pageSize, categoryID)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.FindList: %w", err)
+	}
+	// ③ 逐个转 DTO：封面/头像由 toresp 在此拼成公开 URL。
+	// 用 &videos[i] 取切片元素地址（可寻址），而不是 range 循环变量 &v，避免取地址陷阱。
+	items := make([]modelsVideo.VideoResp, len(videos))
+	for i := range videos {
+		items[i] = *s.toresp.ToVideoResp(&videos[i])
+	}
+	// ④ 组装分页响应：List 是本次页数据，Total 是总数，Page/PageSize 原样回传供前端维护分页状态
+	return &modelsVideo.ListVideo{
+		List:     items,
+		Total:    uint(total),
+		Page:     uint16(page),
+		PageSize: uint16(pageSize),
+	}, nil
+}
+
+// HotVideos 获取热门视频列表（首页/热门榜）。
+// 两级策略：
+//  1. 优先读 Redis 缓存 "video:hot"（有序列表，按热度从高到低存视频 ID，10 分钟过期）：
+//     命中则按页取 ID → 逐个回查 DB → 转 DTO 返回，避免每次请求都全量计算热度。
+//  2. 缓存未命中或读取异常：降级为 DB 全量公开视频，按热度公式实时计算并排序，
+//     随后回写 Redis 供后续请求命中。
+//
+// 分页约束：page 最小 1，pageSize 限制在 1~50（默认 16）。
+func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVideo.ListVideo, error) {
+	// ① 分页参数防御：page 最小 1；pageSize 越界（<1 或 >50）回退默认 16
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 50 {
+		pageSize = 16
+	}
+	// 热门榜单的 Redis 缓存 key
+	rdbKey := "video:hot"
+
+	// ② 优先走缓存：未接入 Redis 或缓存为空时才降级到 DB 计算
+	if s.rdb != nil {
+		// 取缓存列表总长度，同时作为响应里的 Total；读取失败只记日志并降级
+		lenth, err := s.rdb.LLen(c, rdbKey).Result()
+		if err != nil {
+			logger.Warn("Redis 获取热门列表总数失败，降级使用缓存内已加载数量", zap.String("operation", "HotVideos"), zap.String("key", rdbKey), zap.Error(err))
+		}
+		// 缓存非空才走缓存分支
+		if err == nil && lenth > 0 {
+			// 计算本页在有序列表中的下标区间 [start, stop]（LRange 含 stop 端点，故减 1）
+			start := int64((page - 1) * pageSize)
+			stop := start + int64(pageSize) - 1
+			// 取本页的视频 ID 字符串列表
+			idxs, err := s.rdb.LRange(c, rdbKey, start, stop).Result()
+			if err == nil && len(idxs) > 0 {
+				items := make([]modelsVideo.VideoResp, 0, len(idxs))
+				// 逐个 ID 回查 DB：ID 解析失败、视频已删除均跳过（缓存可能残留失效 ID）
+				for _, idStr := range idxs {
+					id, err := strconv.ParseUint(idStr, 10, 64)
+					if err != nil {
+						continue
+					}
+					video, err := s.repo.FindByID(c, uint(id))
+					if err != nil || video == nil {
+						continue
+					}
+					// 可见性兜底：仅展示公开（过审）视频；userID=0 表示匿名游客视角
+					if _, err := s.FindVideoAndForbidden(c, video.ID, 0); err != nil {
+						return nil, err
+					}
+					items = append(items, *s.toresp.ToVideoResp(video))
+				}
+				// 缓存命中：Total 用缓存列表总长度（与 items 长度可能不同，因跳过了失效视频）
+				total := lenth
+				return &modelsVideo.ListVideo{
+					List:     items,
+					Total:    uint(total),
+					Page:     uint16(page),
+					PageSize: uint16(pageSize),
+				}, nil
+			}
+		}
+	}
+
+	// ③ 降级路径：缓存未命中/异常 → DB 全量公开视频 + 实时热度计算
+	videos, err := s.repo.ListPublic(c)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.HotVideos: %w", err)
+	}
+	nowTime := time.Now()
+	// scored 是"视频 ID + 热度得分"的中间结构，仅用于本次排序
+	type scored struct {
+		id    uint
+		score float64
+	}
+	// 热度公式：score = 播放量 / 时间衰减因子
+	scoreList := make([]scored, len(videos))
+	for i, v := range videos {
+		// 视频发布距现在的小时数（越小越新）
+		scoreTime := nowTime.Sub(v.CreatedAt).Hours()
+		// 单位时间内播放量越高热度越高；+2 防除零，1.5 次方为时间衰减（越老衰减越快）
+		score := float64(v.Views) / math.Pow(scoreTime+2, 1.5)
+		scoreList[i] = scored{id: v.ID, score: score}
+	}
+	// 按热度降序排序（快排，平均 O(nlogn)）
+	sort.Slice(scoreList, func(i, j int) bool {
+		return scoreList[i].score > scoreList[j].score
+	})
+
+	// ④ 把本次计算的榜单回写 Redis（10 分钟过期），后续请求直接命中缓存
+	if s.rdb != nil {
+		// 先清空旧榜单再写入，避免新旧数据叠加
+		s.rdb.Del(c, rdbKey)
+		// Pipeline 批量提交，减少网络往返
+		pipe := s.rdb.Pipeline()
+		for _, sc := range scoreList {
+			pipe.RPush(c, rdbKey, strconv.FormatUint(uint64(sc.id), 10))
+		}
+		pipe.Expire(c, rdbKey, 600*time.Second)
+		pipe.Exec(c)
+	}
+
+	// ⑤ 按当前页在降序榜单上切片，取本页数据
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > uint(len(scoreList)) {
+		end = uint(len(scoreList))
+	}
+
+	// ⑥ 逐个回查 DB 转 DTO：视频已不存在则跳过（榜单计算期间可能被删除）
+	items := make([]modelsVideo.VideoResp, 0, end-start)
+	for i := start; i < end; i++ {
+		video, repoErr := s.repo.FindByID(c, scoreList[i].id)
+		if repoErr != nil || video == nil {
+			continue
+		}
+		items = append(items, *s.toresp.ToVideoResp(video))
+	}
+	return &modelsVideo.ListVideo{
+		List:     items,
+		Total:    uint(len(scoreList)),
+		Page:     uint16(page),
+		PageSize: uint16(pageSize),
+	}, nil
+}
+
+//
 
 //=========================辅助方法============================
 

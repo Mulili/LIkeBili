@@ -5,6 +5,7 @@ import (
 	modelsVideo "LikeBili/internal/models/video"
 	"context"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -184,4 +185,16 @@ func (r *Repository) DeleteVideo(c context.Context, video *modelsVideo.Video) er
 		return fmt.Errorf("Method:video.repository.DeleteVideo: %w", err)
 	}
 	return nil
+}
+
+// 当删除时间超过一定时限，由管理员调用硬删除
+func (r *Repository) ListDeleteBefore(c context.Context, droptime time.Time) ([]modelsVideo.Video, error) {
+	var videos []modelsVideo.Video
+	if err := r.db.WithContext(c).
+		Model(&modelsVideo.Video{}).
+		Where("deleted_at IS NOT NULL AND deleted_at < ?", droptime).
+		Find(&videos).Error; err != nil {
+		return nil, fmt.Errorf("Method:video.repository.ListDeleteBefore: %w", err)
+	}
+	return videos, nil
 }
