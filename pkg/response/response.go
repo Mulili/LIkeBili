@@ -99,6 +99,23 @@ func ErrorFrom(c *gin.Context, operation string, err error) {
 // 因此以后新增错误码时，记得在这里补一条 case，否则会落入 default（500）。
 func httpStatusForCode(code int) int {
 	switch code {
+	// ---- 标准 HTTP 状态码（映射到自身）----
+	// ErrorBadRequest / ErrorUnauthorized 等哨兵以这些值为 Code，
+	// 保证它们经 ErrorFrom 走本函数时也不会落入 default（500）。
+	case codeErrors.BadRequest:
+		return http.StatusBadRequest
+	case codeErrors.Unauthorized:
+		return http.StatusUnauthorized
+	case codeErrors.Forbidden:
+		return http.StatusForbidden
+	case codeErrors.NotFound:
+		return http.StatusNotFound
+	case codeErrors.Conflict:
+		return http.StatusConflict
+	case codeErrors.TooManyRequests:
+		return http.StatusTooManyRequests
+	case codeErrors.Internal:
+		return http.StatusInternalServerError
 	// ---- 注册/登录类（1xxxx）----
 	// 冲突：数据已存在（用户名/邮箱重复，含并发注册竞态兜底）
 	case codeErrors.CodeUsernameExists, codeErrors.CodeEmailExists, codeErrors.CodeUsernameOrEmailExists:
@@ -123,6 +140,19 @@ func httpStatusForCode(code int) int {
 	// 写入对象存储失败 → 基础设施故障
 	case codeErrors.CodeFileUploadFailed:
 		return http.StatusInternalServerError
+	// ---- 视频类（4xxxx）----
+	// 资源缺失：视频不存在 / 转码任务不存在
+	case codeErrors.CodeVideoNotFound, codeErrors.CodeTaskNotFound:
+		return http.StatusNotFound
+	// 无权限：无权访问 / 非管理员过审 / 未过审视频
+	case codeErrors.CodeVideoForbidden, codeErrors.CodeVideoStatusForbidden, codeErrors.CodeVideoNotPass:
+		return http.StatusForbidden
+	// 转码失败 → 服务端处理失败
+	case codeErrors.CodeVideoTransFailed:
+		return http.StatusInternalServerError
+	// 转码未完成 → 暂时不可用，前端可稍后重试（语义对应 503 Service Unavailable）
+	case codeErrors.CodeVideoTransNotReady:
+		return http.StatusServiceUnavailable
 	// ---- 服务器内部错误（5xxxx）----
 	case codeErrors.CodeInternal:
 		return http.StatusInternalServerError

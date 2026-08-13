@@ -407,7 +407,23 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 	}, nil
 }
 
-//
+// HotRankVideos 按窗口（日/周/月）返回 TopN 视频详情。
+// rank.HotRank 只返回视频 ID，这里回查 DB 拼成完整 DTO（封面/头像 URL）。
+func (s *Service) HotRankVideos(c context.Context, window time.Duration, top int) (*modelsVideo.ListVideo, error) {
+	ids, err := s.rank.HotRank(c, window, top)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.HotRankVideos: %w", err)
+	}
+	items := make([]modelsVideo.VideoResp, 0, len(ids))
+	for _, id := range ids {
+		video, err := s.FindVideoAndForbidden(c, id, 0)
+		if err != nil {
+			continue
+		}
+		items = append(items, *s.toresp.ToVideoResp(video))
+	}
+	return &modelsVideo.ListVideo{List: items, Total: uint(len(items))}, nil
+}
 
 //=========================辅助方法============================
 
