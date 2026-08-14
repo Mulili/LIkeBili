@@ -116,6 +116,8 @@ func httpStatusForCode(code int) int {
 		return http.StatusTooManyRequests
 	case codeErrors.Internal:
 		return http.StatusInternalServerError
+	case codeErrors.ServiceUnavailable:
+		return http.StatusServiceUnavailable
 	// ---- 注册/登录类（1xxxx）----
 	// 冲突：数据已存在（用户名/邮箱重复，含并发注册竞态兜底）
 	case codeErrors.CodeUsernameExists, codeErrors.CodeEmailExists, codeErrors.CodeUsernameOrEmailExists:

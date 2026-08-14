@@ -227,46 +227,239 @@ func (h *Handler) Upload(c *gin.Context) {
 	flusher.Flush()
 }
 
+// GetVideo 获取单个视频详情（GET /videos/:id，游客可访问）。
+// 可见性规则统一收口在 Service 层的 FindVideoAndForbidden：
+// 公开且审核通过的视频所有人可见；未过审/私密的视频仅作者本人可见，其他人一律返回 404。
 func (h *Handler) GetVideo(c *gin.Context) {
 	operation := "GetVideo"
+	// ① 解析路径参数 id（缺失/非数字 → 400）
 	videoID, err := param.Parse[uint](c, "id")
 	if err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
 
+	// ② 读取当前查看者身份：未挂 AuthRequired 的游客为 0，可见性判断时等同"非作者"
 	viewerID := middleware.GetUserID(c)
 
+	// ③ 查详情并做可见性校验：视频不存在 / 无权访问 → 404（Service 已映射好业务错误码）
 	resp, err := h.svc.GetVideo(c.Request.Context(), videoID, viewerID)
 	if err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
 
+	// ④ 成功：返回视频 DTO（封面/头像等元信息，不含播放地址，播放走 /:id/play-url 现签）
 	response.Success(c, resp)
 }
 
+// UpdateVideo 更新视频信息（PUT /videos/:id，需登录）。
+// 权限要求：仅视频作者本人可修改，非作者 → 403 CodeVideoForbidden。
 func (h *Handler) UpdateVideo(c *gin.Context) {
 	operation := "UpdateVideo"
+	// ① 鉴权兜底：正常路由挂 AuthRequired，此处防御 token 失效/未挂中间件的情况
 	userID := middleware.GetUserID(c)
 	if userID == 0 {
 		response.ErrorFrom(c, operation, codeErrors.ErrUnauthorized)
 		return
 	}
 
+	// ② 解析路径参数 id
 	videoID, err := param.Parse[uint](c, "id")
 	if err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
+	// ③ 解析 JSON 请求体（字段缺失/类型不符 → 400）
 	var req modelsVideo.UpdateVideoReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
+	// ④ 更新：Service 内部校验"视频存在 + 是作者本人"，失败分别映射 404/403
 	resp, err := h.svc.UpdateVideo(c.Request.Context(), videoID, userID, &req)
 	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ⑤ 成功：返回更新后的视频 DTO
+	response.Success(c, resp)
+}
+
+// DeleteVideo 删除视频（DELETE /videos/:id，需登录）。
+// 权限要求：仅视频作者本人可删除（与 UpdateVideo 同一套 AssessVideoAndAuthor 校验）。
+func (h *Handler) DeleteVideo(c *gin.Context) {
+	operation := "DeleteVideo"
+	// ① 鉴权兜底
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		response.ErrorFrom(c, operation, codeErrors.ErrUnauthorized)
+		return
+	}
+
+	// ② 解析路径参数 id
+	id, err := param.Parse[uint](c, "id")
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ③ 删除：Service 层校验作者身份 + 级联处理（失败映射 404/403）
+	if err := h.svc.DeleteVideo(c.Request.Context(), id, userID); err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ④ 成功：无返回体，仅状态码 200
+	response.Success(c, nil)
+}
+
+// ListVideo 分页拉取公开视频列表（GET /videos，游客可访问，首页/分类页用）。
+// 查询参数：
+//   - page：页码（默认 1，非法值由 Service 兜底为 1）
+//   - page_size：每页条数（默认 16，上限 50）
+//   - category_id：分类过滤（默认 0 = 全部分类；非法值降级为不过滤）
+func (h *Handler) ListVideo(c *gin.Context) {
+	operation := "ListVideo"
+	// ① 解析分页参数：strconv 失败返回 0/默认值，由 Service 层统一做防御性兜底
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "16"))
+	categoryIDStr := c.DefaultQuery("category_id", "0")
+	categoryID, _ := strconv.ParseUint(categoryIDStr, 10, 64)
+
+	// ② 查公开视频：repo 已过滤 status=2（审核通过）+ view_status=1（公开）
+	resp, err := h.svc.ListPagePublicVideo(c.Request.Context(), uint(page), uint(pageSize), uint(categoryID))
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ③ 成功：返回分页结构（List + Total + Page + PageSize）
+	response.Success(c, resp)
+}
+
+// ListUserVideos 分页查询指定用户的视频列表（GET /users/:id/videos，游客可访问）。
+// 查询参数：
+//   - page：页码（默认 1）、page_size：每页条数（默认 12，上限 50）
+//   - status：按状态过滤，不传 = 全部（作者本人查看自己的作品时使用）
+func (h *Handler) ListUserVideos(c *gin.Context) {
+	operation := "ListUserVideos"
+	// ① 解析路径参数：目标用户的 id
+	userID, err := param.Parse[uint](c, "id")
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ② 解析分页参数
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "12"))
+
+	// ③ 解析可选的状态过滤参数：仅当合法时才设置过滤器
+	var statusFilter *uint8
+	statusStr := c.DefaultQuery("status", "")
+	if statusStr != "" {
+		status, err := strconv.ParseUint(statusStr, 10, 8)
+		if err == nil {
+			value := uint8(status)
+			statusFilter = &value
+		} else {
+			logger.Warn("无法解析视频状态", zap.Uint("user_id", userID), zap.Error(err))
+		}
 
 	}
 
+	// ④ 查列表（按状态过滤可选）
+	resp, err := h.svc.ListUserVideos(c.Request.Context(), userID, statusFilter, page, pageSize)
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ⑤ 成功：返回分页结构
+	response.Success(c, resp)
+}
+
+// HotRank 返回按热度排序的排行榜（GET /videos/hot-rank，游客可访问）。
+// 前端只需要告诉窗口口径即可，不用关心 Redis 天桶合并等内部实现：
+//   - window：day=日榜 / week=周榜 / month=月榜（默认 day）
+//   - top：返回条数上限（默认 10，钳制在 1~50，防超大 top 拖垮 DB 回查）
+//
+// 实现链路：Handler 只取窗口名字符串原样下传给 Service →
+// Service.HotRankVideosByWindow 内部调 rank.ParseWindow 解析成时间窗口 →
+// 复用 HotRankVideos：rank.HotRank 合并窗口内天桶取 TopN 视频 ID →
+// 回查 DB 拼 DTO；Redis 冷启动/不可用时自动降级为空榜（Total=0），不阻塞页面。
+func (h *Handler) HotRank(c *gin.Context) {
+	operation := "HotRank"
+
+	// ① 取窗口参数：原样传字符串，由 Service 内部调 rank.ParseWindow 解析（非法值 → 400）
+	windowName := c.DefaultQuery("window", "day")
+
+	// ② 解析 top 条数：默认 10，越界钳制到 1~50
+	top, _ := strconv.Atoi(c.DefaultQuery("top", "10"))
+	if top < 1 {
+		top = 10
+	}
+	if top > 50 {
+		top = 50
+	}
+
+	// ③ 取榜：窗口内按热度降序返回视频列表（空榜返回空 List，不算错误）
+	resp, err := h.svc.HotRankVideosByWindow(c.Request.Context(), windowName, top)
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ④ 成功：返回按热度降序的视频列表
+	response.Success(c, resp)
+}
+
+// HotVideos 返回热门视频列表（GET /videos/hot，游客可访问）。
+// 两级策略在 Service 层实现：优先读 Redis "video:hot" 缓存（10 分钟过期），
+// 未命中/异常时降级为 DB 全量实时计算热度并回写缓存。
+// 查询参数：page（默认 1）、page_size（默认 16，上限 50）。
+func (h *Handler) HotVideos(c *gin.Context) {
+	operation := "HotVideos"
+	// ① 解析分页参数：非法值由 Service 兜底（page<1→1，pageSize 越界→16）
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "16"))
+
+	// ② 取热门列表：Redis 缓存优先，DB 实时计算兜底
+	resp, err := h.svc.HotVideos(c.Request.Context(), uint(page), uint(pageSize))
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ③ 成功：返回分页结构
+	response.Success(c, resp)
+}
+
+// GetPlayURL 获取视频播放地址（GET /videos/:id/play-url，游客可访问）。
+// 详情接口不返回播放地址（防爬虫抓取），前端点击播放时单独请求，
+// 拿到 1 小时有效的 MinIO 预签名 URL 后交给播放器。
+// 可见性校验与 GetVideo 一致：公开且审核通过，或作者本人。
+func (h *Handler) GetPlayURL(c *gin.Context) {
+	operation := "GetPlayURL"
+	// ① 解析路径参数 id
+	videoID, err := param.Parse[uint](c, "id")
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ② 读取查看者身份（游客为 0），Service 层做可见性校验
+	userID := middleware.GetUserID(c)
+
+	// ③ 校验可见性 + 现签预签名 URL（1 小时有效）
+	url, err := h.svc.GetPresignedUrl(c.Request.Context(), videoID, userID)
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+
+	// ④ 成功：返回播放地址字符串
+	response.Success(c, url)
 }

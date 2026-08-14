@@ -3,12 +3,14 @@
 package rank
 
 import (
+	"LikeBili/pkg/logger"
 	"context"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // Service 热度排行榜服务：只依赖 Redis（rdb），不依赖任何业务模块。
@@ -93,13 +95,15 @@ func (s *Service) HotRank(c context.Context, window time.Duration, top int) ([]u
 	// ② 合并到临时 key：带纳秒后缀防并发请求互相覆盖，用完即删
 	tmpkey := "rank:heat:tmp:" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	if err := s.rdb.ZUnionStore(c, tmpkey, &redis.ZStore{Keys: keys}).Err(); err != nil {
-		return nil, fmt.Errorf("Method:rank.Service.HotRank: %w", err)
+		logger.Error("排行榜无法连接", zap.String("operation", "HotRank"), zap.Error(err))
+		return nil, nil
 	}
 	defer s.rdb.Del(c, tmpkey)
 	// ③ 按分数降序取前 top 个 member（视频 ID）
 	members, err := s.rdb.ZRevRange(c, tmpkey, 0, int64(top-1)).Result()
 	if err != nil {
-		return nil, fmt.Errorf("Method:rank.Service.HotRank: %w", err)
+		logger.Error("排行榜无法连接", zap.String("operation", "HotRank"), zap.Error(err))
+		return nil, nil
 	}
 	ids := make([]uint, 0, len(members))
 	for _, m := range members {

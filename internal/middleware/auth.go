@@ -8,10 +8,12 @@ import (
 	codeErrors "LikeBili/pkg/errors"
 	extracttoken "LikeBili/pkg/extracttoken"
 	jwtlib "LikeBili/pkg/jwt"
+	"LikeBili/pkg/logger"
 	"LikeBili/pkg/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // AuthRequired 鉴权中间件：验证请求中的 JWT Token，并校验 Redis 中该用户的"当前有效 Token"。
@@ -48,8 +50,10 @@ func AuthRequired(jwtSvc *jwtlib.JWT, rdbClient *redis.Client) gin.HandlerFunc {
 			c.Abort()
 			return
 		case err != nil:
-			// Redis 故障：原始错误提取不到业务码 → ErrorFrom 兜底（自动记日志 + 500）
-			response.ErrorFrom(c, "AuthRequired", err)
+			// Redis 故障：凭证本身有效，只是暂时无法验证 → 503（区别于 401"未授权"），
+			// 避免前端误以为登录过期而误导用户退出重登。先记日志保留原始错误，再统一走错误码体系。
+			logger.Error("鉴权中间件 Redis 不可用", zap.String("operation", "AuthRequired"), zap.Error(err))
+			response.ErrorFrom(c, "AuthRequired", codeErrors.ErrorServiceUnavailable)
 			c.Abort()
 			return
 		case storedToken != token:

@@ -10,12 +10,15 @@ import (
 	"LikeBili/internal/repository/favorites"
 	codeErrors "LikeBili/pkg/errors"
 	jwtlib "LikeBili/pkg/jwt"
+	"LikeBili/pkg/logger"
 	"LikeBili/pkg/storage"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -105,7 +108,8 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 	// Redis key 格式：auth:token:{userID}，用于登出时失效 Token
 	rdbKey := fmt.Sprintf("auth:token:%d", user.ID)
 	if err := s.rdb.Set(c, rdbKey, token, s.tokenTTL).Err(); err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", codeErrors.Wrap(err, codeErrors.CodeInternal, "服务器繁忙,账号可能已被注册,请移步登录"))
+		logger.Warn("Redis 不可用，跳过 token 缓存", zap.String("operation", "Login"), zap.Error(err))
+
 	}
 	// ---------- 第七步：为新用户创建默认收藏夹 ----------
 	// 通过收藏夹仓库（而非直接 SQL）操作，保持分层结构。
@@ -181,8 +185,9 @@ func (s *Service) Login(c context.Context, account, password string) (*usermodel
 
 func (s *Service) Logout(c context.Context, userID uint) error {
 	rdbkey := fmt.Sprintf("auth:token:%d", userID)
+	// fail-open：Redis 不可用时跳过删除（token 残留到 JWT 过期，风险低），
 	if err := s.rdb.Del(c, rdbkey).Err(); err != nil {
-		return fmt.Errorf("Method:auth.service.Logout: %w", err)
+		logger.Warn("Redis 不可用，跳过 token 删除", zap.String("operation", "Logout"), zap.Error(err))
 	}
 	return nil
 }
@@ -227,7 +232,17 @@ func (s *Service) Refresh(c context.Context, oldToken string) (string, error) {
 	}
 	rdbkey := fmt.Sprintf("auth:token:%d", claims.UserID)
 	storedToken, err := s.rdb.Get(c, rdbkey).Result()
-	if err != nil || storedToken != oldToken {
+	if err != nil {
+		// 拆分支区分"凭证无效"与"后端故障"，避免 Redis 故障被误报 401 把用户踢下线：
+		// ① token 不存在/已过期（redis.Nil）→ 真未授权（401）
+		// ② Redis 连接故障 → 服务暂时不可用（503），凭证本身是有效的
+		if errors.Is(err, redis.Nil) {
+			return "", fmt.Errorf("Method:auth.service.Refresh: %w", codeErrors.ErrUnauthorized)
+		}
+		return "", fmt.Errorf("Method:auth.service.Refresh: %w", codeErrors.ErrorServiceUnavailable)
+	}
+	if storedToken != oldToken {
+		// 顶号/篡改：Redis 中已换成新 token，说明传入的旧 token 已失效 → 真未授权（401）
 		return "", fmt.Errorf("Method:auth.service.Refresh: %w", codeErrors.ErrUnauthorized)
 	}
 

@@ -306,7 +306,8 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 		// 取缓存列表总长度，同时作为响应里的 Total；读取失败只记日志并降级
 		lenth, err := s.rdb.LLen(c, rdbKey).Result()
 		if err != nil {
-			logger.Warn("Redis 获取热门列表总数失败，降级使用缓存内已加载数量", zap.String("operation", "HotVideos"), zap.String("key", rdbKey), zap.Error(err))
+			// LLen 失败 → lenth=0 且 err!=nil，下方缓存分支不会进入，直接降级到 DB 实时计算
+			logger.Warn("Redis 获取热门列表总数失败，降级走 DB 实时计算", zap.String("operation", "HotVideos"), zap.String("key", rdbKey), zap.Error(err))
 		}
 		// 缓存非空才走缓存分支
 		if err == nil && lenth > 0 {
@@ -329,7 +330,7 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 					}
 					// 可见性兜底：仅展示公开（过审）视频；userID=0 表示匿名游客视角
 					if _, err := s.FindVideoAndForbidden(c, video.ID, 0); err != nil {
-						return nil, err
+						continue
 					}
 					items = append(items, *s.toresp.ToVideoResp(video))
 				}
@@ -407,6 +408,32 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 	}, nil
 }
 
+func (s *Service) ListUserVideos(c context.Context, userID uint, status *uint8, page, pageSize int) (*modelsVideo.ListVideo, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 50 {
+		pageSize = 16
+	}
+
+	videos, total, err := s.repo.FindListByUser(c, userID, page, pageSize, status)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.ListUserVideos: %w", err)
+	}
+
+	items := make([]modelsVideo.VideoResp, len(videos))
+	for i, v := range videos {
+		items[i] = *s.toresp.ToVideoResp(&v)
+	}
+
+	return &modelsVideo.ListVideo{
+		List:     items,
+		Total:    uint(total),
+		Page:     uint16(page),
+		PageSize: uint16(pageSize),
+	}, nil
+}
+
 // HotRankVideos 按窗口（日/周/月）返回 TopN 视频详情。
 // rank.HotRank 只返回视频 ID，这里回查 DB 拼成完整 DTO（封面/头像 URL）。
 func (s *Service) HotRankVideos(c context.Context, window time.Duration, top int) (*modelsVideo.ListVideo, error) {
@@ -423,6 +450,14 @@ func (s *Service) HotRankVideos(c context.Context, window time.Duration, top int
 		items = append(items, *s.toresp.ToVideoResp(video))
 	}
 	return &modelsVideo.ListVideo{List: items, Total: uint(len(items))}, nil
+}
+
+func (s *Service) HotRankVideosByWindow(c context.Context, windowname string, top int) (*modelsVideo.ListVideo, error) {
+	window, err := rank.ParseWindow(windowname)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.HotRankVideosByWindow: %w", codeErrors.New(codeErrors.CodeInvalid, "window 参数仅支持 day/week/month"))
+	}
+	return s.HotRankVideos(c, window, top)
 }
 
 //=========================辅助方法============================

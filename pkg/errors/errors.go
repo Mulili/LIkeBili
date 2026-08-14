@@ -16,14 +16,15 @@ func (e *Error) Error() string {
 
 const (
 	// HTTP 标准状态码
-	OK              = 200
-	BadRequest      = 400
-	Unauthorized    = 401
-	Forbidden       = 403
-	NotFound        = 404
-	Conflict        = 409
-	Internal        = 500
-	TooManyRequests = 429
+	OK                 = 200
+	BadRequest         = 400
+	Unauthorized       = 401
+	Forbidden          = 403
+	NotFound           = 404
+	Conflict           = 409
+	Internal           = 500
+	TooManyRequests    = 429
+	ServiceUnavailable = 503
 	//auth状态码
 	CodeUsernameExists    = 10001
 	CodeEmailExists       = 10002
@@ -70,7 +71,7 @@ var (
 	ErrFavoriteForbidden = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
 	ErrTokenInvalid      = &Error{Code: CodeTokenInvalid, Message: "令牌无效"}
 	ErrTokenExpired      = &Error{Code: CodeTokenExpired, Message: "令牌已过期"}
-	ErrUnauthorized      = &Error{Code: CodeUnauthorized, Message: "未授权，请先登录"}
+	ErrUnauthorized      = &Error{Code: CodeUnauthorized, Message: "无法获取资源，请先登录"}
 	ErrCodeUserIsBan     = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
 	// 注册竞态兜底错误：并发注册时唯一索引冲突（MySQL 1062）统一返回该错误
 	ErrUsernameOrEmailExists = &Error{Code: CodeUsernameOrEmailExists, Message: "用户名或邮箱重复"}
@@ -98,6 +99,9 @@ var (
 	ErrorConflict        = &Error{Code: Conflict, Message: "资源冲突"}
 	ErrorInternal        = &Error{Code: Internal, Message: "服务器内部错误"}
 	ErrorTooManyRequests = &Error{Code: TooManyRequests, Message: "请求过于频繁，请稍后再试"}
+	// 服务暂时不可用（503）：用于"凭证本身有效但后端暂时无法验证"的场景，
+	// 与"未授权(401)"严格区分，避免前端误以为登录过期而误导用户退出重登。
+	ErrorServiceUnavailable = &Error{Code: ServiceUnavailable, Message: "服务暂时不可用，请稍后重试"}
 )
 
 // 创建纯业务错误（不包裹内部 error）
