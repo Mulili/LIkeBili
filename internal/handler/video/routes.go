@@ -18,15 +18,18 @@ import (
 // RegisterRoutes 注册视频模块全部路由，并在此一次性完成依赖装配。
 // 转码链路：publishFn 非 nil 走 MQ 发布，发布失败/为 nil 时由 WithTranscodeRunner
 // 注入的闭包降级为本地 ProcessVideo（真实 ffmpeg HLS 转码）。
+// reviewProvider：审核记录查询器（admin 模块 Repository 实现），
+// 用于作者查看驳回原因；不注入则作者端不展示驳回原因，不影响其它功能。
 // 需登录的写操作（上传/更新/删除）统一挂 AuthRequired 中间件。
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *toresp.VideoRespBuilder, rank *rank.Service, storage *storage.MinIO, broker *transcode.ProgressBroker, jwtSvc *jwtlib.JWT, publishFn func(videoID uint) error) {
-	// ① 依赖装配：repo → service（含转码降级注入）→ handler
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *toresp.VideoRespBuilder, rank *rank.Service, storage *storage.MinIO, broker *transcode.ProgressBroker, jwtSvc *jwtlib.JWT, publishFn func(videoID uint) error, reviewProvider svc.ReviewProvider) {
+	// ① 依赖装配：repo → service（含转码降级 + 审核查询注入）→ handler
 	repo := repo.NewRepository(db)
 	svc := svc.NewService(repo, rdb, storage, toresp, rank,
 		svc.WithTranscodePublisher(publishFn),
 		svc.WithTranscodeRunner(func(videoID uint) {
 			transcode.ProcessVideo(videoID, db, broker, storage)
 		}),
+		svc.WithReviewProvider(reviewProvider),
 	)
 	handler := NewHandler(svc)
 

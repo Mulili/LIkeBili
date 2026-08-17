@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	modelsReview "LikeBili/internal/models/review"
 	"LikeBili/internal/models/transcode"
 	modelsVideo "LikeBili/internal/models/video"
 	rpvideo "LikeBili/internal/repository/video"
@@ -33,10 +34,20 @@ type Service struct {
 	toresp  *toresp.VideoRespBuilder // 视频响应 DTO 转换器（跨模块统一出口，构造时注入）
 	rank    *rank.Service
 
+	// reviewProvider 审核记录查询器（作者端展示驳回原因用）。
+	// 由 admin 模块的 Repository 实现，通过接口注入避免 video 反向依赖 admin 包。
+	reviewProvider ReviewProvider
+
 	// transcodePublisher 可选旁路依赖：转码任务发布者（如 MQ）。
 	// nil = 未接入 MQ，走进程内降级转码（transcodeLocal）。
 	transcodePublisher func(videoID uint) error
 	transcodeRunner    func(videoID uint)
+}
+
+// ReviewProvider 审核记录查询接口：作者查看自己视频详情（status=3）时，
+// 需要知道"审核失败原因"，由外部（admin 模块的 Repository）实现注入。
+type ReviewProvider interface {
+	GetLatestReview(ctx context.Context, videoID uint) (*modelsReview.VideoReview, error)
 }
 
 // UploadVideoInput 上传视频的入参 DTO。
@@ -67,6 +78,12 @@ func WithTranscodePublisher(fn func(videoID uint) error) Option {
 
 func WithTranscodeRunner(fn func(videoID uint)) Option {
 	return func(s *Service) { s.transcodeRunner = fn }
+}
+
+// WithReviewProvider 注入审核记录查询器（作者端驳回原因展示）。
+// 不注入 = 作者端不展示驳回原因，不影响其它功能。
+func WithReviewProvider(p ReviewProvider) Option {
+	return func(s *Service) { s.reviewProvider = p }
 }
 
 // NewService 构造 Service。必传依赖走位置参数，可选依赖走 Option。
@@ -153,7 +170,15 @@ func (s *Service) GetVideo(c context.Context, videoID, userID uint) (*modelsVide
 	}
 	// ⑤ 转 DTO：封面/头像由 toresp 统一拼公开 URL；
 	// 播放地址故意不出现在 DTO 里（防爬），前端点播放时另行请求 GetPresignedUrl 现签
-	return s.toresp.ToVideoResp(video), nil
+	resp := s.toresp.ToVideoResp(video)
+	// ⑥ 作者端驳回原因：仅当视频被驳回（status=3）且注入了审核查询器时，
+	// 查最新一条审核记录把 reason 填进 DTO（非作者看不到 3 的视频，此处天然只对作者可见）
+	if video.Status == 3 && s.reviewProvider != nil {
+		if review, err := s.reviewProvider.GetLatestReview(c, videoID); err == nil && review != nil {
+			resp.RejectReason = review.Reason
+		}
+	}
+	return resp, nil
 }
 
 // GetPresignedUrl 生成视频播放地址：1 小时有效的预签名 URL。

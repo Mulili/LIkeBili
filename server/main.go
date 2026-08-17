@@ -1,6 +1,7 @@
 package main
 
 import (
+	adminhandler "LikeBili/internal/handler/admin"
 	authhandler "LikeBili/internal/handler/auth"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
@@ -8,10 +9,13 @@ import (
 	modelsFavorites "LikeBili/internal/models/favorites"
 	modelsMeta "LikeBili/internal/models/meta"
 	modelsQuality "LikeBili/internal/models/quality"
+	modelsReview "LikeBili/internal/models/review"
 	modelsTrans "LikeBili/internal/models/transcode"
 	modelsUser "LikeBili/internal/models/user"
 	modelsVideo "LikeBili/internal/models/video"
+	adminRepo "LikeBili/internal/repository/admin"
 	favRepo "LikeBili/internal/repository/favorites"
+	rpvideo "LikeBili/internal/repository/video"
 	"LikeBili/internal/service/rank"
 	"LikeBili/internal/transcode"
 	"LikeBili/pkg/config"
@@ -56,6 +60,7 @@ func main() {
 		&modelsFavorites.Favorites{},
 		&modelsVideo.Category{},
 		&modelsVideo.Video{},
+		&modelsReview.VideoReview{},
 		&modelsTrans.TranscodeTask{},
 		&modelsMeta.VideoMeta{},
 		&modelsQuality.VideoQuality{},
@@ -66,8 +71,12 @@ func main() {
 	broker := transcode.NewProgressBroker()     // 转码进度广播器（前端 SSE 订阅用）
 	toresp := toresp.NewVideoRespBuilder(minio) // 视频 DTO 转换器
 	rankSvc := rank.NewService(rdb)             // 热度排行榜服务
+	adminRepo := adminRepo.NewRepository(db)    // 审核记录查询器（作者端驳回原因展示）
 	// publishFn 暂不接 MQ → 传 nil，Service 自动降级为本地转码（WithTranscodeRunner）
-	videohandler.RegisterRoutes(api, db, rdb, toresp, rankSvc, minio, broker, jwtSvc, nil)
+	videohandler.RegisterRoutes(api, db, rdb, toresp, rankSvc, minio, broker, jwtSvc, nil, adminRepo)
+	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
+	videoRepo := rpvideo.NewRepository(db)
+	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toresp, jwtSvc)
 
 	r.Run(cfg.ServerPort)
 }

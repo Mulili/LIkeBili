@@ -38,6 +38,7 @@ type VideoResp struct {
 	FileSize    uint64    `json:"file_size"`
 	CategoryID  uint32    `json:"category_id"` //类型id，建立索引，否则如果以后查找某一个类型就得全表查询
 	Status      uint8     `json:"status"`      //视频状态：1待审核2审核成功3审核失败4隐藏
+	RejectReason string   `json:"reject_reason,omitempty"` //审核失败原因（仅作者可见，status=3 时有效）
 	Views       uint32    `json:"views"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

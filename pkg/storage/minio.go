@@ -247,6 +247,38 @@ func (m *MinIO) Delete(ctx context.Context, objectName string) error {
 	return nil
 }
 
+// DeletePrefix 按对象名前缀批量删除（ListObjects 枚举 + RemoveObjects 批量删）。
+//
+// 为什么需要它：转码产物是"一个目录"——比如一个 720p 档位包含
+// index.m3u8 + 几十个 ts 分片，它们都挂在同一个前缀（如 "videos/5/720p/"）下。
+// 单独用 Delete 只能删一个对象，要删一整个目录必须按前缀枚举后批量删。
+//
+// 参数 prefix：对象名前缀，必须以 "/" 结尾（如 "videos/5/720p/"），
+// 删除该前缀下的全部对象（含 m3u8 与所有 ts 分片）。
+func (m *MinIO) DeletePrefix(ctx context.Context, prefix string) error {
+	// ① 枚举：把前缀下的所有对象投递进 channel（ListObjects 支持前缀 + 递归）
+	objectsCh := make(chan minio.ObjectInfo)
+	go func() {
+		defer close(objectsCh)
+		for obj := range m.client.ListObjects(ctx, m.bucketName, minio.ListObjectsOptions{
+			Prefix:    prefix,
+			Recursive: true,
+		}) {
+			if obj.Err != nil {
+				continue // 单个对象枚举出错跳过，不中断整体
+			}
+			objectsCh <- obj
+		}
+	}()
+	// ② 批量删除：RemoveObjects 消费 channel，逐个删除并返回失败项
+	for errInfo := range m.client.RemoveObjects(ctx, m.bucketName, objectsCh, minio.RemoveObjectsOptions{}) {
+		if errInfo.Err != nil {
+			return fmt.Errorf("storage.DeletePrefix(prefix=%s): %w", prefix, errInfo.Err)
+		}
+	}
+	return nil
+}
+
 // UploadVideo 将视频数据流上传到 MinIO，专用于视频文件。
 //
 // 注意：当前实现与 UploadFile 完全一致，两者是重复代码。

@@ -1,6 +1,9 @@
 package video
 
 import (
+	modelsMeta "LikeBili/internal/models/meta"
+	modelsQuality "LikeBili/internal/models/quality"
+	modelsReview "LikeBili/internal/models/review"
 	"LikeBili/internal/models/transcode"
 	modelsVideo "LikeBili/internal/models/video"
 	"context"
@@ -197,4 +200,49 @@ func (r *Repository) ListDeleteBefore(c context.Context, droptime time.Time) ([]
 		return nil, fmt.Errorf("Method:video.repository.ListDeleteBefore: %w", err)
 	}
 	return videos, nil
+}
+
+// ListQualityObjects 查一批视频的所有转码档位对象名（m3u8 的 ObjectName）。
+// 用途：硬删视频前收集 MinIO 删除目标；必须与硬删 DB 同一批视频，且先查询再删除。
+func (r *Repository) ListQualityObjects(c context.Context, videoIDs []uint) ([]string, error) {
+	var objects []string
+	if len(videoIDs) == 0 {
+		return objects, nil
+	}
+	if err := r.db.WithContext(c).
+		Model(&modelsQuality.VideoQuality{}).
+		Where("video_id IN ?", videoIDs).
+		Pluck("object_name", &objects).Error; err != nil {
+		return nil, fmt.Errorf("Method:video.repository.ListQualityObjects: %w", err)
+	}
+	return objects, nil
+}
+
+// HardDeleteExpiredTx 事务内硬删（Unscoped）一批软删超期视频，并级联删除关联表记录：
+// video_reviews（审核流水）、transcode_tasks（转码任务）、video_metas（元信息）、
+// video_qualities（清晰度档位）。保证"视频本体与关联数据"要么同时删除、要么全部回滚。
+func (r *Repository) HardDeleteExpiredTx(c context.Context, videoIDs []uint) error {
+	if len(videoIDs) == 0 {
+		return nil
+	}
+	return r.db.WithContext(c).Transaction(func(tx *gorm.DB) error {
+		// ① 硬删视频本体（Unscoped 忽略软删过滤，物理删除）
+		if err := tx.Unscoped().Where("id IN ?", videoIDs).Delete(&modelsVideo.Video{}).Error; err != nil {
+			return err
+		}
+		// ② 级联删除关联表（按 video_id 批量删）
+		if err := tx.Where("video_id IN ?", videoIDs).Delete(&modelsReview.VideoReview{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id IN ?", videoIDs).Delete(&transcode.TranscodeTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id IN ?", videoIDs).Delete(&modelsMeta.VideoMeta{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id IN ?", videoIDs).Delete(&modelsQuality.VideoQuality{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }
