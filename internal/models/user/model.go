@@ -24,3 +24,11 @@ type User struct {
 func (User) TableName() string {
 	return "users"
 }
+
+// 角色枚举：与 Role 字段取值对应。
+// 注意：Role 是 tinyint unsigned，取值必须在 0~255 内。
+const (
+	RoleUser  uint8 = 1 // 普通用户：公开注册的默认角色
+	RoleAdmin uint8 = 2 // 审核管理员：审核视频（通过/驳回），由超管创建
+	RoleSuper uint8 = 3 // 超管：启动 seed 创建，仅负责创建审核管理员，不参与审核
+)
