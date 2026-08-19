@@ -25,3 +25,9 @@ MinioAccessKey: "minioadmin"
 MinioSecretKey: "minioadmin"
 MinioBucket: "likebili"
 MinioUseSSL: "false"
+
+rabbitmq: 
+  Host: "192.168.11.100"
+  Port: ":5672"
+  User: "rabbit"
+  Password: "rabbitPassword"

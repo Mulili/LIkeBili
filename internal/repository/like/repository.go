@@ -67,9 +67,9 @@ func (r *Repository) Count(c context.Context, videoID uint) (int64, error) {
 }
 
 // InformAuthorLike 查询视频作者的用户 ID（用于点赞后通知作者）。
-// 注意：视频不存在或已软删时，Pluck 返回 gorm.ErrRecordNotFound（而非 nil 空值），
-// 由 service 用 errors.Is(err, gorm.ErrRecordNotFound) 判断作者不存在；
-// err==nil 时 authorID 为有效作者 ID。
+// 注意：GORM 的 Pluck 没有 First/Take 的 ErrRecordNotFound 语义（RaiseErrorOnNotFound 未开启），
+// 视频不存在或已软删时返回 (0, nil) 而非错误——由 service 判断 authorID==0 视为作者不存在；
+// err != nil 才是数据库查询错误。
 func (r *Repository) InformAuthorLike(c context.Context, videoID uint) (uint, error) {
 	var authorID uint
 	if err := r.db.WithContext(c).Table("videos").
@@ -80,8 +80,8 @@ func (r *Repository) InformAuthorLike(c context.Context, videoID uint) (uint, er
 }
 
 // FindLikeUsername 查询用户展示名（昵称优先，昵称为空时回退用户名，用于点赞通知文案）。
-// 注意：用户不存在时，Pluck 返回 gorm.ErrRecordNotFound（而非 nil），
-// 由 service 用 errors.Is 判断；err==nil 时 name 即为有效展示名。
+// 注意：GORM 的 Pluck 无 ErrRecordNotFound 语义，用户不存在时返回 ("", nil)——
+// 由 service 判断 name=="" 视为查询不到；err != nil 才是数据库查询错误。
 func (r *Repository) FindLikeUsername(c context.Context, userID uint) (string, error) {
 	var name string
 	if err := r.db.WithContext(c).Table("users").
