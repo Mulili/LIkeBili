@@ -1,17 +1,19 @@
 package rabbitmq
 
 import (
+	"LikeBili/pkg/logger"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.uber.org/zap"
 )
 
 // queueTranscode 转码任务队列名（durable 持久化，broker 重启后消息不丢失）。
 const (
-	queueTranscode = "video.transcode"
+	QueueTranscode = "video.transcode"
 )
 
 // TranscodeMessage 转码任务消息体：投递到 video.transcode 队列，消费端按 VideoID 执行转码。
@@ -78,7 +80,7 @@ func (c *Client) connect() error {
 		return fmt.Errorf("Method:rabbitmq.connect: channel: %w", err)
 	}
 	// 声明持久化队列：durable=true 保证队列定义在 broker 重启后依然存在
-	if _, err := ch.QueueDeclare(queueTranscode, true, false, false, false, nil); err != nil {
+	if _, err := ch.QueueDeclare(QueueTranscode, true, false, false, false, nil); err != nil {
 		ch.Close()
 		conn.Close()
 		return fmt.Errorf("Method:rabbitmq.connect: channel: %w", err)
@@ -124,6 +126,37 @@ func (c *Client) reconnectLoop() {
 			}
 		}
 	}
+}
+
+// Consume 消费指定队列：独立 channel + 逐条手动 ack，消息反序列化后交给 handler。
+// 注意：必须用独立 channel，避免与 Publish 共用 c.channel 时互相阻塞（共用 mu）。
+func (c *Client) Consume(queue string, handler func(body []byte) error) error {
+	c.mu.Lock()
+	ch, err := c.conn.Channel() // 从当前连接派生新 channel
+	c.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("Method:rabbitmq.Consume: %w", err)
+	}
+	defer ch.Close()
+	if _, err := ch.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("Method:rabbitmq.Consume: %w", err) // 与发布侧声明一致，幂等
+	}
+	// 一次只取一条，逐条处理
+	if err := ch.Qos(1, 0, false); err != nil {
+		return fmt.Errorf("Method:rabbitmq.Consume: %w", err)
+	}
+	// autoAck=false
+	msgs, err := ch.Consume(queue, "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("Method:rabbitmq.Consume: %w", err)
+	}
+	for m := range msgs {
+		if err := handler(m.Body); err != nil {
+			logger.Warn("转码消息处理失败", zap.Error(err)) // 不重投：失败状态已由 ProcessVideo 落库
+		}
+		_ = m.Ack(false) // 手动确认，防止未处理消息被重复投递
+	}
+	return nil // channel 关闭（断线）时返回
 }
 
 // Publish 向指定队列发布持久化消息（JSON 格式）。

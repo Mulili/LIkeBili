@@ -34,6 +34,11 @@ type Config struct {
 	MinioSecretKey      string // MinIO 密钥
 	MinioBucket         string // MinIO 存储桶名称
 	MinioUseSSL         bool   // MinIO 是否启用 SSL
+
+	RabbitMQHost     string
+	RabbitMQPort     string
+	RabbitMQUser     string
+	RabbitMQPassword string
 }
 
 func InitConfig() *Config {
@@ -66,6 +71,11 @@ func InitConfig() *Config {
 	v.SetDefault("MINIO_SECRET_KEY", "minioadmin")
 	v.SetDefault("MINIO_BUCKET", "likebili")
 	v.SetDefault("MINIO_USE_SSL", false)
+	//rabbitmq
+	v.SetDefault("RABBITMQ_HOST", "192.168.11.100")
+	v.SetDefault("RABBITMQ_PORT", "5672")
+	v.SetDefault("RABBITMQ_USER", "rabbit")
+	v.SetDefault("RABBITMQ_PASSWORD", "rabbitPassword")
 	//配置文件名
 	v.SetConfigName("config")
 	//配置文件后缀
@@ -104,6 +114,10 @@ func InitConfig() *Config {
 		MinioSecretKey:      v.GetString("MINIO_SECRET_KEY"),
 		MinioBucket:         v.GetString("MINIO_BUCKET"),
 		MinioUseSSL:         v.GetBool("MINIO_USE_SSL"),
+		RabbitMQHost:        v.GetString("RABBITMQ_HOST"),
+		RabbitMQPort:        v.GetString("RABBITMQ_PORT"),
+		RabbitMQUser:        v.GetString("RABBITMQ_USER"),
+		RabbitMQPassword:    v.GetString("RABBITMQ_PASSWORD"),
 	}
 
 	return cfg
