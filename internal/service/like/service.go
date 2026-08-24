@@ -2,6 +2,7 @@ package like
 
 import (
 	modelsLike "LikeBili/internal/models/like"
+	modelsMessage "LikeBili/internal/models/message"
 	rplike "LikeBili/internal/repository/like"
 	"context"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 
 // 将点赞转发给作者的接口
 type Notifier interface {
-	SendNotification(c context.Context, userID uint, fromUserID uint, msgType int8, targetID uint, content string) error
+	SendNotification(c context.Context, userID uint, fromUserID uint, msgType uint8, targetID uint, content string) error
 }
 
 type Service struct {
@@ -131,9 +132,9 @@ func (s *Service) notifyAuthor(c context.Context, userID, videoID uint) {
 		likeUsername = name
 	}
 
-	// ③ 发送通知（msgType=2 为点赞类型）
+	// ③ 发送通知（MsgTypeLike=1 点赞类型；常量定义在 message 模块，防枚举错位）
 	content := fmt.Sprintf("%s 点赞了你的视频", likeUsername)
-	if err := s.notifier.SendNotification(c, authorID, userID, 2, videoID, content); err != nil {
+	if err := s.notifier.SendNotification(c, authorID, userID, modelsMessage.MsgTypeLike, videoID, content); err != nil {
 		logger.Warn("点赞通知发送失败", zap.Uint("author_id", authorID), zap.Uint("video_id", videoID), zap.Error(err))
 	}
 }
