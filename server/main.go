@@ -72,10 +72,11 @@ func main() {
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
 	// --- 视频模块装配 ---
-	broker := transcode.NewProgressBroker()     // 转码进度广播器（前端 SSE 订阅用）
-	toresp := toresp.NewVideoRespBuilder(minio) // 视频 DTO 转换器
-	rankSvc := rank.NewService(rdb)             // 热度排行榜服务
-	adminRepo := adminRepo.NewRepository(db)    // 审核记录查询器（作者端驳回原因展示）
+	broker := transcode.NewProgressBroker()
+	userBriefBuider := toresp.NewToRespBuilder(minio)                 // 转码进度广播器（前端 SSE 订阅用）
+	toVideoResp := toresp.NewVideoRespBuilder(minio, userBriefBuider) // 视频 DTO 转换器
+	rankSvc := rank.NewService(rdb)                                   // 热度排行榜服务
+	adminRepo := adminRepo.NewRepository(db)                          // 审核记录查询器（作者端驳回原因展示）
 
 	// --- RabbitMQ 转码异步化装配 ---
 	// 链路：上传 → publishFn 投递任务到 MQ → 消费者 goroutine 拉取 → transcode.ProcessVideo 执行真实转码。
@@ -118,10 +119,10 @@ func main() {
 			return mq.Publish(rabbitmq.QueueTranscode, body)
 		}
 	}
-	videohandler.RegisterRoutes(api, db, rdb, toresp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo)
+	videohandler.RegisterRoutes(api, db, rdb, toVideoResp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
-	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toresp, jwtSvc)
+	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)
 
 	r.Run(cfg.ServerPort)
 }

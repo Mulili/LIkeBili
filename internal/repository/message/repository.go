@@ -58,13 +58,14 @@ func (r *Repository) UpdateAllIsRead(c context.Context, userID uint) error {
 
 // UpdateTheIsRead 将单条消息置为已读（用于用户点击某条消息后更新状态）。
 // 带 is_read = 未读 条件，重复点击不产生额外写操作（幂等）。
-func (r *Repository) UpdateTheIsRead(c context.Context, userID, msgID uint) error {
-	if err := r.db.WithContext(c).Model(&modelsMessage.Message{}).
-		Where("user_id = ? AND id = ? AND is_read = 1", userID, msgID).
-		Update("is_read", modelsMessage.ReadStatusRead).Error; err != nil {
-		return fmt.Errorf("Method:message.repository.UpdateTheIsRead: %w", err)
+func (r *Repository) UpdateTheIsRead(c context.Context, userID, msgID uint) (bool, error) {
+	result := r.db.WithContext(c).Model(&modelsMessage.Message{}).
+		Where("user_id = ? AND id = ? AND is_read = ?", userID, msgID, modelsMessage.ReadStatusUnread).
+		Update("is_read", modelsMessage.ReadStatusRead)
+	if result.Error != nil {
+		return false, fmt.Errorf("Method:message.repository.UpdateTheIsRead: %w", result.Error)
 	}
-	return nil
+	return result.RowsAffected > 0, nil
 }
 
 // UnreadCount 统计用户未读消息数（供列表响应的 Unread 字段 / 前端红点角标）。

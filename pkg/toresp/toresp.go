@@ -13,12 +13,20 @@ import (
 // 持有 storage 用于拼公开 URL。播放地址（VideoURL）已从 DTO 移除：
 // 它属于受保护内容，由视频模块的 GetPresignedUrl 现签 1 小时预签名 URL。
 type VideoRespBuilder struct {
+	storage   *storage.MinIO
+	userBrief *UserBriefRespBuilder
+}
+type UserBriefRespBuilder struct {
 	storage *storage.MinIO
 }
 
+func NewToRespBuilder(storage *storage.MinIO) *UserBriefRespBuilder {
+	return &UserBriefRespBuilder{storage: storage}
+}
+
 // NewVideoRespBuilder 构造转换器。各 Service 用自己持有的 storage 实例化。
-func NewVideoRespBuilder(storage *storage.MinIO) *VideoRespBuilder {
-	return &VideoRespBuilder{storage: storage}
+func NewVideoRespBuilder(storage *storage.MinIO, userBrief *UserBriefRespBuilder) *VideoRespBuilder {
+	return &VideoRespBuilder{storage: storage, userBrief: userBrief}
 }
 
 // ToVideoResp 转换主方法：Video → VideoResp。
@@ -38,12 +46,17 @@ func (b *VideoRespBuilder) ToVideoResp(v *modelsVideo.Video) *modelsVideo.VideoR
 		UpdatedAt:   v.UpdatedAt,
 	}
 	if v.User.ID != 0 {
-		resp.User = &modelsUser.UserBrief{
-			ID:       v.User.ID, // 注意：必须取 v.User，此时 resp.User 仍为 nil，取它会空指针 panic
-			Username: v.User.Username,
-			Nickname: v.User.Nickname,
-			Avatar:   b.storage.URL(v.User.Avatar), // 头像永久公开；空串返回空
-		}
+		resp.User = b.userBrief.ToUserBriefResp(&v.User)
 	}
 	return resp
+}
+
+func (t *UserBriefRespBuilder) ToUserBriefResp(u *modelsUser.User) *modelsUser.UserBrief {
+	brief := &modelsUser.UserBrief{
+		ID:       u.ID,
+		Username: u.Username,
+		Nickname: u.Nickname,
+		Avatar:   t.storage.URL(u.Avatar),
+	}
+	return brief
 }
