@@ -4,6 +4,7 @@ import (
 	modelsLike "LikeBili/internal/models/like"
 	modelsMessage "LikeBili/internal/models/message"
 	rplike "LikeBili/internal/repository/like"
+	"LikeBili/internal/service/rank"
 	"context"
 	"fmt"
 
@@ -15,17 +16,18 @@ import (
 
 // 将点赞转发给作者的接口
 type Notifier interface {
-	SendNotification(c context.Context, userID uint, fromUserID uint, msgType uint8, targetID uint, content string) error
+	SendNotification(c context.Context, userID, fromUserID uint, msgType uint8, targetID uint, content string) error
 }
 
 type Service struct {
 	repo     *rplike.Repository
 	rdb      *redis.Client
 	notifier Notifier
+	rank     *rank.Service
 }
 
-func NewService(repo *rplike.Repository, rdb *redis.Client, notifier Notifier) *Service {
-	return &Service{repo: repo, rdb: rdb, notifier: notifier}
+func NewService(repo *rplike.Repository, rdb *redis.Client, notifier Notifier, rank *rank.Service) *Service {
+	return &Service{repo: repo, rdb: rdb, notifier: notifier, rank: rank}
 }
 
 // likeCountKey 返回视频点赞计数的 Redis 缓存键。
@@ -48,20 +50,21 @@ func (s *Service) Create(c context.Context, userID, videoID uint) (*modelsLike.L
 	}
 
 	liked := inserted
-	if !inserted {
-		// ② 已赞状态下再次点击 = 取消点赞：删除 MySQL 关系记录
-		if err := s.repo.Delete(c, userID, videoID); err != nil {
-			return nil, fmt.Errorf("Method:like.service.Create: %w", err)
+	// ③ 新增点赞时：热度埋点 + 通知视频作者（作者不能给自己点赞，查询失败/不存在也跳过）
+	if inserted {
+		if s.rank != nil {
+			// 热度埋点：点赞权重 +2.0 分；Redis 故障只记日志，不阻塞点赞主流程
+			if err := s.rank.Incr(c, videoID, rank.DeltaLike); err != nil {
+				logger.Warn("点赞热度埋点失败", zap.Uint("video_id", videoID), zap.Error(err))
+			}
+		}
+		if s.notifier != nil {
+			s.notifyAuthor(c, userID, videoID)
 		}
 	}
 
-	// ③ 尽力同步 Redis 计数缓存（可选层）：失败只记日志，主流程照常返回
+	// ④ 尽力同步 Redis 计数缓存（可选层）：失败只记日志，主流程照常返回
 	s.syncCountCache(c, videoID, liked)
-
-	// ④ 新增点赞时通知视频作者（作者不能给自己点赞，查询失败/不存在也跳过）
-	if inserted && s.notifier != nil {
-		s.notifyAuthor(c, userID, videoID)
-	}
 
 	// ⑤ 读最新计数：Redis 缓存未命中/故障时回退 MySQL COUNT
 	count, err := s.GetVideoLikes(c, videoID)

@@ -3,6 +3,7 @@ package main
 import (
 	adminhandler "LikeBili/internal/handler/admin"
 	authhandler "LikeBili/internal/handler/auth"
+	likehandler "LikeBili/internal/handler/like"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
 	"LikeBili/internal/middleware"
@@ -15,7 +16,9 @@ import (
 	modelsVideo "LikeBili/internal/models/video"
 	adminRepo "LikeBili/internal/repository/admin"
 	favRepo "LikeBili/internal/repository/favorites"
+	rpmessage "LikeBili/internal/repository/message"
 	rpvideo "LikeBili/internal/repository/video"
+	svcmessage "LikeBili/internal/service/message"
 	"LikeBili/internal/service/rank"
 	"LikeBili/internal/transcode"
 	"LikeBili/pkg/config"
@@ -75,9 +78,13 @@ func main() {
 	broker := transcode.NewProgressBroker()
 	userBriefBuider := toresp.NewToRespBuilder(minio)                 // 转码进度广播器（前端 SSE 订阅用）
 	toVideoResp := toresp.NewVideoRespBuilder(minio, userBriefBuider) // 视频 DTO 转换器
-	rankSvc := rank.NewService(rdb)                                   // 热度排行榜服务
-	adminRepo := adminRepo.NewRepository(db)                          // 审核记录查询器（作者端驳回原因展示）
-
+	// 热度排行榜服务
+	rankSvc := rank.NewService(rdb)
+	adminRepo := adminRepo.NewRepository(db) // 审核记录查询器（作者端驳回原因展示）
+	//--- 点赞模块装配：notifier 复用 message 服务，rank 复用热度服务 ---
+	msgRepo := rpmessage.NewRepository(db)
+	msgSvc := svcmessage.NewService(msgRepo, rdb, userBriefBuider)
+	likehandler.RegisterRoutes(api, db, rdb, msgSvc, rankSvc, jwtSvc)
 	// --- RabbitMQ 转码异步化装配 ---
 	// 链路：上传 → publishFn 投递任务到 MQ → 消费者 goroutine 拉取 → transcode.ProcessVideo 执行真实转码。
 	// 降级策略：MQ 不可用时整体退化为本地转码（不启动消费者、publishFn 保持 nil，
