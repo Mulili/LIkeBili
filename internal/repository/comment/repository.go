@@ -203,3 +203,20 @@ func (r *Repository) Exists(c context.Context, userID, commentID uint) (bool, er
 	}
 	return likes.ID != 0, nil
 }
+
+// FindLikedIDs 批量查询当前用户已点赞的评论 ID 集合（评论列表 IsLiked 填充用）。
+// 一次 IN 查询收齐所有命中 ID，避免逐条 Exists 的 N+1 问题；
+// 未登录（userID=0）或 ids 为空时直接返回空切片（不发起 SQL，避免无意义查询与 IN () 语法错误）。
+func (r *Repository) FindLikedIDs(c context.Context, userID uint, ids []uint) ([]uint, error) {
+	if userID == 0 || len(ids) == 0 {
+		return nil, nil
+	}
+	var liked []uint
+	if err := r.db.WithContext(c).
+		Model(&modelsComment.CommentLikes{}).
+		Where("user_id = ? AND comment_id IN ?", userID, ids).
+		Pluck("comment_id", &liked).Error; err != nil {
+		return nil, fmt.Errorf("Method:comment.repository.FindLikedIDs: %w", err)
+	}
+	return liked, nil
+}

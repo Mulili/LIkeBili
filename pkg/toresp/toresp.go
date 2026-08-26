@@ -20,6 +20,7 @@ type UserBriefRespBuilder struct {
 	storage *storage.MinIO
 }
 
+// UserBrief 转换器，用于转换UserBrief同时添加
 func NewToRespBuilder(storage *storage.MinIO) *UserBriefRespBuilder {
 	return &UserBriefRespBuilder{storage: storage}
 }

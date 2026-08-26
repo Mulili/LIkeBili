@@ -14,7 +14,7 @@ import (
 // 前端无法篡改树的归属。
 type CommentReq struct {
 	Content  string `json:"content" validate:"required,max=1000"` // 评论内容，必填，最长 1000 字符
-	ParentID uint   `json:"parent_id"`                            // 直接父级评论 ID：0=根评论，非 0=父评论 ID
+	ParentID *uint  `json:"parent_id"`                            // 直接父级评论 ID：0=根评论，非 0=父评论 ID
 }
 
 // ===============响应体======================
@@ -27,6 +27,7 @@ type CommentReq struct {
 type CommentResp struct {
 	ID        uint                  `json:"id"`         // 评论 ID
 	VideoID   uint                  `json:"video_id"`   // 所属视频 ID
+	UserID    uint                  `json:"user_id"`    //评论用户ID
 	ParentID  uint                  `json:"parent_id"`  // 直接父级评论 ID（0=根评论）
 	RootID    uint                  `json:"root_id"`    // 根评论 ID（整棵树的根）
 	Content   string                `json:"content"`    // 评论内容

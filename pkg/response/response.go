@@ -155,6 +155,16 @@ func httpStatusForCode(code int) int {
 	// 转码未完成 → 暂时不可用，前端可稍后重试（语义对应 503 Service Unavailable）
 	case codeErrors.CodeVideoTransNotReady:
 		return http.StatusServiceUnavailable
+	// ---- 评论类（4xxxx）----
+	// 资源缺失：评论不存在
+	case codeErrors.CodeCommentNotFound:
+		return http.StatusNotFound
+	// 评论操作失败（兜底）→ 服务端处理失败
+	case codeErrors.CodeCommentFailed:
+		return http.StatusInternalServerError
+	//超过设定最大深度时报错,防止树闭环进入死循环，或楼中楼太深加载困难
+	case codeErrors.CodeCommentMostDeep:
+		return http.StatusBadRequest
 	// ---- 服务器内部错误（5xxxx）----
 	case codeErrors.CodeInternal:
 		return http.StatusInternalServerError
