@@ -52,7 +52,7 @@ func (r *Repository) FindByID(c context.Context, id uint) (*modelsComment.VideoC
 func (r *Repository) FindRootComments(c context.Context, videoID uint, sort string, page, pageSize int) ([]modelsComment.VideoComments, int64, error) {
 	var total int64
 	// ① 统计该视频的根评论总数（parent_id=0 过滤掉子评论，总数不含回复）
-	query := r.db.WithContext(c).Model(&modelsComment.VideoComments{}).Where("video_id = ? AND parent_id = 0", videoID)
+	query := r.db.WithContext(c).Unscoped().Model(&modelsComment.VideoComments{}).Where("video_id = ? AND parent_id = 0", videoID)
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("Method:comment.repository.FindRootComments: %w", err)
 	}
@@ -84,7 +84,7 @@ func (r *Repository) FindRepliesByRootIDs(c context.Context, ids []uint) ([]mode
 	}
 
 	var list []modelsComment.VideoComments
-	if err := r.db.WithContext(c).Preload("User").
+	if err := r.db.WithContext(c).Unscoped().Preload("User").
 		Where("root_id IN ?", ids).
 		Order("created_at ASC").Find(&list).Error; err != nil {
 		return nil, fmt.Errorf("Method:comment.repository.FindRepliesByRootIDs: %w", err)
@@ -98,7 +98,7 @@ func (r *Repository) FindRepliesByRootIDs(c context.Context, ids []uint) ([]mode
 func (r *Repository) FindRepliesByRootID(c context.Context, rootID uint, page, pageSize int) ([]modelsComment.VideoComments, int64, error) {
 	var total int64
 	// ① 统计该根评论下的回复总数（不包含根评论自身，根评论 root_id=0 不会命中）
-	query := r.db.WithContext(c).Model(&modelsComment.VideoComments{}).Where("root_id = ?", rootID)
+	query := r.db.WithContext(c).Unscoped().Model(&modelsComment.VideoComments{}).Where("root_id = ?", rootID)
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("Method:comment.repository.FindRepliesByRootID: %w", err)
 	}

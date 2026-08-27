@@ -28,7 +28,7 @@ type VideoComments struct {
 	Likes    uint   `gorm:"default:0" json:"likes"`                                       // 点赞总数（冗余计数，由 comment_likes 表的增删维护）
 
 	CreatedAt time.Time       `gorm:"not null" json:"created_at"` // 评论创建时间
-	DeletedAt gorm.DeletedAt  `gorm:"not null" json:"deleted_at"` // 软删除时间：删除评论时写入，列表查询自动过滤
+	DeletedAt gorm.DeletedAt  `json:"deleted_at"`                 // 软删除时间：删除评论时写入，列表查询自动过滤
 	User      modelsUser.User `gorm:"foreignKey:UserID" json:"-"` // 关联评论者（Preload 填充头像/昵称）
 }
 

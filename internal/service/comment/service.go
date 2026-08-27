@@ -4,12 +4,15 @@ import (
 	modelsComments "LikeBili/internal/models/comments"
 	modelsMessage "LikeBili/internal/models/message"
 	repocomment "LikeBili/internal/repository/comment"
+	"LikeBili/internal/service/rank"
 	codeErrors "LikeBili/pkg/errors"
+	"LikeBili/pkg/logger"
 	"LikeBili/pkg/toresp"
 	"context"
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // repliesPreviewLimit 根评论列表内嵌回复预览条数：回复超过该值只展示前几条，
@@ -25,18 +28,19 @@ type Notifier interface {
 }
 
 // Service 评论模块业务层：发表评论/回复、拉取评论树、评论点赞，
-// 以及评论后的热度埋点与作者通知（埋点待接入 rank 服务）。
+// 以及评论后的热度埋点（计入视频热榜）与作者通知。
 type Service struct {
 	repo     *repocomment.Repository      // 数据访问：评论/回复的增删查与点赞
 	rdb      *redis.Client                // Redis：预留评论计数缓存
+	rank     *rank.Service                // 热门榜服务：评论/回复行为对视频热度的埋点，可为 nil
 	notifier Notifier                     // 通知转发器（message 模块实现），可传 nil 跳过通知
 	toresp   *toresp.UserBriefRespBuilder // 评论者信息转换器（头像 objKey → 完整 URL）
 }
 
-// NewService 构造评论服务，注入 Repository/Redis/通知器/用户简要信息转换器。
-// notifier 可为 nil（不通知作者，不影响评论主流程）。
-func NewService(repo *repocomment.Repository, rdb *redis.Client, notifier Notifier, toresp *toresp.UserBriefRespBuilder) *Service {
-	return &Service{repo: repo, rdb: rdb, notifier: notifier, toresp: toresp}
+// NewService 构造评论服务，注入 Repository/Redis/通知器/用户简要信息转换器/热门榜服务。
+// notifier 可为 nil（不通知作者，不影响评论主流程）；rank 可为 nil（不做热榜埋点）。
+func NewService(repo *repocomment.Repository, rdb *redis.Client, notifier Notifier, toresp *toresp.UserBriefRespBuilder, rank *rank.Service) *Service {
+	return &Service{repo: repo, rdb: rdb, notifier: notifier, toresp: toresp, rank: rank}
 }
 
 // Create 发表评论/回复（根评论与楼中楼共用一条链路），以 MySQL 为权威数据源：
@@ -44,7 +48,7 @@ func NewService(repo *repocomment.Repository, rdb *redis.Client, notifier Notifi
 //   - 回复：ParentID=直接父评论 ID → RootID 由父评论继承（见 resolveRootID），
 //     并向"直接父评论"的作者发送"XX 回复了你的评论"通知（作者不能回复自己，不通知）
 //
-// 流程：校验视频存在 → 解析 RootID → 落库 → 重查补全评论者 User → 通知父评论作者 → 组装响应。
+// 流程：校验视频存在 → 解析 RootID → 落库 → 热度埋点 → 重查补全评论者 User → 通知父评论作者 → 组装响应。
 func (s *Service) Create(c context.Context, videoID, userID uint, req *modelsComments.CommentReq) (*modelsComments.CommentResp, error) {
 	// ① 取直接父评论 ID：ParentID 指针为 nil 时视为 0（根评论）
 	parent := uint(0)
@@ -85,14 +89,22 @@ func (s *Service) Create(c context.Context, videoID, userID uint, req *modelsCom
 		return nil, fmt.Errorf("Method:comment.service.Create: %w", err)
 	}
 
-	// ⑤ Create 落库后只回填了 ID，重查一次以通过 Preload 获得评论者 User（头像/昵称）；
+	// ⑤ 评论热度埋点：评论/回复发布 → 给"所属视频"热度 +DeltaReply(2.5)（热榜 member 是视频 ID，非评论）。
+	//    Redis 故障只记日志，不阻塞评论主流程
+	if s.rank != nil {
+		if err := s.rank.Incr(c, videoID, rank.DeltaReply); err != nil {
+			logger.Warn("评论热度埋点失败", zap.Uint("video_id", videoID), zap.Error(err))
+		}
+	}
+
+	// ⑥ Create 落库后只回填了 ID，重查一次以通过 Preload 获得评论者 User（头像/昵称）；
 	// 查询失败时回退到 comm（User 为空，响应里 user 字段不返回，不影响主流程）
 	created, _ := s.repo.FindByID(c, comm.ID)
 	if created == nil {
 		created = comm
 	}
 
-	// ⑥ 回复通知：发给"直接父评论"的作者；父评论不存在/回复自己/通知器为 nil 时跳过
+	// ⑦ 回复通知：发给"直接父评论"的作者；父评论不存在/回复自己/通知器为 nil 时跳过
 	if parent > 0 && s.notifier != nil {
 		if parentErr == nil && parentComm != nil && parentComm.UserID != userID {
 			// 发送者展示名：昵称优先，空则回退用户名，再兜底"用户"（created.User 即发送者本人）
@@ -108,7 +120,7 @@ func (s *Service) Create(c context.Context, videoID, userID uint, req *modelsCom
 		}
 	}
 
-	return s.toCommentResp(c, created), nil
+	return s.toCommentResp(created), nil
 }
 
 // GetComments 视频根评论列表分页查询（每条根评论附带第一页回复预览与回复总数）。
@@ -167,7 +179,7 @@ func (s *Service) GetComments(c context.Context, videoID, userID uint, page, pag
 	// ⑥ 按 RootID 分组组装回复（此刻 likedSet 已就绪，直接打标 IsLiked）
 	replyMap := make(map[uint][]modelsComments.CommentResp, len(rootIDs))
 	for i := range commList {
-		resp := s.toCommentResp(c, &commList[i])
+		resp := s.toCommentResp(&commList[i])
 		resp.IsLiked = likedSet[resp.ID]
 		replyMap[resp.RootID] = append(replyMap[resp.RootID], *resp)
 	}
@@ -175,7 +187,7 @@ func (s *Service) GetComments(c context.Context, videoID, userID uint, page, pag
 	// ⑦ 组装根评论：内嵌回复预览（截断）+ 回复总数 + IsLiked
 	items := make([]modelsComments.CommentResp, 0, len(list))
 	for _, l := range list {
-		r := s.toCommentResp(c, &l)
+		r := s.toCommentResp(&l)
 		r.IsLiked = likedSet[l.ID]
 		replies := replyMap[l.ID]
 		r.ReplyTotal = uint(len(replies)) // 全量拉取下 len 即该根评论的回复总数
@@ -232,7 +244,7 @@ func (s *Service) GetReplies(c context.Context, rootID, userID uint, page, pageS
 
 	// ④ 组装响应：转 CommentResp 并打标 IsLiked（前端按 ParentID 递归组装楼中楼树）
 	for i := range list {
-		resp := s.toCommentResp(c, &list[i])
+		resp := s.toCommentResp(&list[i])
 		resp.IsLiked = likedSet[list[i].ID]
 		items = append(items, *resp)
 	}
@@ -245,7 +257,113 @@ func (s *Service) GetReplies(c context.Context, rootID, userID uint, page, pageS
 	}, nil
 }
 
-//================辅助方法===================
+// DeleteComments 删除评论（软删除，deleted_at 置位），权限模型：评论作者本人 或 视频作者（管理任意评论）可删。
+// 删除后该评论的子树回复保留（不级联删），按设计由检索侧对已删父节点统一替换为
+// 官方"评论已删除"占位评论展示，保证楼中楼树结构不被孤儿节点破坏。
+// 未登录（userID==0）一律拒绝：防御纵深，防止"视频不存在→authorID==0 与未登录 userID==0 的 0==0"越权组合。
+func (s *Service) DeleteComments(c context.Context, userID, id, videoID uint) error {
+	// ① 鉴权兜底：未登录直接拒绝，不进入后续任何权限判断
+	if userID == 0 {
+		return fmt.Errorf("Method:comment.service.DeleteComments: %w", codeErrors.ErrUnauthorized)
+	}
+
+	// ② 查目标评论：不存在（含已被软删，FindByID 默认作用域排除）返回 ErrCommentNotFound
+	comm, err := s.repo.FindByID(c, id)
+	if err != nil {
+		return fmt.Errorf("Method:comment.service.DeleteComments: %w", err)
+	}
+	if comm == nil {
+		return fmt.Errorf("Method:comment.service.DeleteComments: %w", codeErrors.ErrCommentNotFound)
+	}
+
+	// ③ 查视频作者：videoID>0 才查（0 表示调用方未提供，跳过视频作者管理权，仅评论作者本人可删）
+	var authorID uint
+	if videoID > 0 {
+		authorID, err = s.repo.FindAuthorID(c, videoID)
+		if err != nil {
+			return fmt.Errorf("Method:comment.service.DeleteComments: %w", err)
+		}
+	}
+
+	// ④ 权限判定：评论作者本人 或 视频作者 → 允许删除；否则 Forbidden
+	if comm.UserID == userID || authorID == userID {
+		if err := s.repo.Delete(c, id); err != nil {
+			return fmt.Errorf("Method:comment.service.DeleteComments: %w", err)
+		}
+	} else {
+		return fmt.Errorf("Method:comment.service.DeleteComments: %w", codeErrors.ErrCodeForbidden)
+	}
+
+	return nil
+}
+
+// ToggleLike 评论点赞/取消（toggle），以 MySQL 为权威数据源（Redis 计数缓存暂未接入）：
+//   - 未赞 → InsertIgnore 幂等新增点赞关系（唯一索引 uk_user_comment 防重复，返回 true=本次真正新增）
+//   - 已赞 → DeleteLike 删除点赞关系（再次点击 = 取消点赞）
+//
+// 新增点赞时顺带给"评论所属视频"热度埋点（+DeltaLike，见步骤⑤）。
+//
+// 关系变更后通过 UpdateVideoLikes 用 gorm.Expr("likes + ?") 在数据库层原子增减冗余计数列
+// （video_comments.likes），避免并发时"绝对值覆盖"互相丢更新。返回的 Likes 以"变更前读取的
+// comm.Likes ± 1"得出：数据库值始终正确，返回值在极端并发下可能有瞬时偏差（与 like 模块语义一致，可接受）。
+//
+// 预留扩展（本方法暂未实现）：① 点赞通知评论作者（可复用 MsgTypeLike，targetID=commentID）；
+// ② Redis 计数缓存（rdb 字段已预留）。
+func (s *Service) ToggleLike(c context.Context, userID, commentID uint) (*modelsComments.CommentLikeResp, error) {
+	// ① 鉴权兜底：未登录不参与点赞（防御纵深，与 DeleteComments 入口一致）
+	if userID == 0 {
+		return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", codeErrors.ErrUnauthorized)
+	}
+
+	// ② 校验评论存在：不存在（含已软删，FindByID 默认作用域排除）返回 ErrCommentNotFound。
+	//    顺带拿到变更前的 comm.Likes，供 ⑤ 计算最新计数（Preload User 略浪费但复用现有方法）
+	comm, err := s.repo.FindByID(c, commentID)
+	if err != nil {
+		return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", err)
+	}
+	if comm == nil {
+		return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", codeErrors.ErrCommentNotFound)
+	}
+
+	// ③ 幂等写入点赞关系，返回"本次是否真正新增"：
+	//    true  = 之前未赞，本次点赞成功（计数 +1）
+	//    false = 已赞过（唯一索引挡住重复插入），语义转为"取消点赞"（计数 -1）
+	inserted, err := s.repo.InsertIgnore(c, userID, commentID)
+	if err != nil {
+		return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", err)
+	}
+
+	// ④ 按新增/取消定增量并落库：
+	//    取消时先物理删除点赞关系记录（comment_likes 表无软删字段），再原子减计数
+	delta := 1
+	if !inserted {
+		delta = -1
+		if err := s.repo.DeleteLike(c, userID, commentID); err != nil {
+			return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", err)
+		}
+	}
+	if err := s.repo.UpdateVideoLikes(c, commentID, delta); err != nil {
+		return nil, fmt.Errorf("Method:comment.service.ToggleLike: %w", err)
+	}
+
+	//评论点赞权重最低，为1.0，用户可以点赞评论，但是对于视频热度并没有很多贡献
+	if inserted && s.rank != nil {
+		if err := s.rank.Incr(c, comm.VideoID, rank.DeltaComent); err != nil {
+			logger.Warn("评论点赞热度埋点失败", zap.Uint("comment_id", commentID), zap.Uint("video_id", comm.VideoID), zap.Error(err))
+		}
+	}
+
+	// ⑥ 组装响应：Liked=本次操作后是否已赞（新增=true / 取消=false）；Likes=变更前计数 ± 1
+	likes := comm.Likes
+	if delta > 0 {
+		likes++
+	} else {
+		likes--
+	}
+	return &modelsComments.CommentLikeResp{Liked: inserted, Likes: likes}, nil
+}
+
+//======================================辅助方法========================================
 
 // resolveRootID 解析回复的树根 RootID 与直接父评论。
 // 只查一次直接父评论即可：每条评论落库时已冗余 RootID，无需沿父链上溯（O(1)）：
@@ -281,8 +399,12 @@ func (s *Service) cutReply(content string, maxLen int) string {
 }
 
 // toCommentResp 将评论实体转换为响应 DTO（读方向基础字段，IsLiked 由点赞查询另行补充）。
-// 评论者 User 存在（未软删，Preload 命中）时经 toresp 转成 UserBrief（头像 objKey → 完整 URL）。
-func (s *Service) toCommentResp(c context.Context, comm *modelsComments.VideoComments) *modelsComments.CommentResp {
+// 已删评论（DeletedAt.Valid 非空）统一替换为官方"评论已删除"占位（见 placeholderCommentResp）；
+// 未删评论的评论者 User 存在（Preload 命中）时经 toresp 转成 UserBrief（头像 objKey → 完整 URL）。
+func (s *Service) toCommentResp(comm *modelsComments.VideoComments) *modelsComments.CommentResp {
+	if comm.DeletedAt.Valid {
+		return s.placeholderCommentResp(comm)
+	}
 	resp := &modelsComments.CommentResp{
 		ID:        comm.ID,
 		VideoID:   comm.VideoID,
@@ -297,4 +419,21 @@ func (s *Service) toCommentResp(c context.Context, comm *modelsComments.VideoCom
 		resp.User = s.toresp.ToUserBriefResp(&comm.User)
 	}
 	return resp
+}
+
+// placeholderCommentResp 构造"评论已删除"官方占位响应，替换已被软删的评论（deleted_at 非空）。
+// 设计要点：
+//   - 保留 ID/ParentID/RootID 维持原有树位置——子回复仍能通过 ParentID 挂回该节点，楼中楼树不塌
+//   - Content 固定为"评论已删除"；Likes/IsLiked 不设置（默认 0/false），已删评论不再暴露原始内容与点赞关系
+//   - User 留 nil（omitempty 省略），由前端对占位评论展示固定"官方"头像昵称
+//   - CreatedAt 沿用原值，保证列表时间排序与展示一致
+func (s *Service) placeholderCommentResp(comm *modelsComments.VideoComments) *modelsComments.CommentResp {
+	return &modelsComments.CommentResp{
+		ID:        comm.ID,
+		VideoID:   comm.VideoID,
+		ParentID:  comm.ParentID,
+		RootID:    comm.RootID,
+		CreatedAt: comm.CreatedAt,
+		Content:   "评论已删除",
+	}
 }
