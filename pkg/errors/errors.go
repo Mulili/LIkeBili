@@ -59,6 +59,8 @@ const (
 	CodeCommentNotFound      = 40008
 	CodeCommentFailed        = 40009
 	CodeCommentMostDeep      = 40010
+	CodeCoinsLowBalance      = 40011
+	CodeCoinsMaxCount        = 40012
 	//favorite状态码
 	CodeFavoriteNotFound  = 60001
 	CodeFavoriteForbidden = 60002
@@ -97,6 +99,9 @@ var (
 	ErrCommentNotFound     = &Error{Code: CodeCommentNotFound, Message: "评论不存在"}
 	ErrCommentFailed       = &Error{Code: CodeCommentFailed, Message: "评论操作失败"}
 	ErrCodeCommentMostDeep = &Error{Code: CodeCommentMostDeep, Message: "评论嵌套上限或闭环"}
+	// ---- 投币类(4xxxx)----
+	ErrCodeCoinsLowBalance = &Error{Code: CodeCoinsLowBalance, Message: "硬币余额不足"}
+	ErrCodeCoinsMaxCount   = &Error{Code: CodeCoinsMaxCount, Message: "投币已达上限"}
 	// ---- HTTP 层标准状态码对应的默认提示 ----
 	// 命名用 Error 前缀，避免与上方业务哨兵（如 ErrUnauthorized）重名。
 	ErrorBadRequest      = &Error{Code: BadRequest, Message: "请求参数错误"}

@@ -3,10 +3,12 @@ package main
 import (
 	adminhandler "LikeBili/internal/handler/admin"
 	authhandler "LikeBili/internal/handler/auth"
+	commenthandler "LikeBili/internal/handler/comment"
 	likehandler "LikeBili/internal/handler/like"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
 	"LikeBili/internal/middleware"
+	modelsComments "LikeBili/internal/models/comments"
 	modelsFavorites "LikeBili/internal/models/favorites"
 	modelsMeta "LikeBili/internal/models/meta"
 	modelsQuality "LikeBili/internal/models/quality"
@@ -71,6 +73,8 @@ func main() {
 		&modelsTrans.TranscodeTask{},
 		&modelsMeta.VideoMeta{},
 		&modelsQuality.VideoQuality{},
+		&modelsComments.VideoComments{},
+		&modelsComments.CommentLikes{},
 	)
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
@@ -127,6 +131,8 @@ func main() {
 		}
 	}
 	videohandler.RegisterRoutes(api, db, rdb, toVideoResp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo)
+	//通知模块装配
+	commenthandler.RegisterRoutes(api, db, rdb, msgSvc, userBriefBuider, rankSvc, jwtSvc)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
 	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)
