@@ -3,11 +3,13 @@ package main
 import (
 	adminhandler "LikeBili/internal/handler/admin"
 	authhandler "LikeBili/internal/handler/auth"
+	coinhandler "LikeBili/internal/handler/coin"
 	commenthandler "LikeBili/internal/handler/comment"
 	likehandler "LikeBili/internal/handler/like"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
 	"LikeBili/internal/middleware"
+	modelsCoins "LikeBili/internal/models/coin"
 	modelsComments "LikeBili/internal/models/comments"
 	modelsFavorites "LikeBili/internal/models/favorites"
 	modelsMeta "LikeBili/internal/models/meta"
@@ -17,9 +19,11 @@ import (
 	modelsUser "LikeBili/internal/models/user"
 	modelsVideo "LikeBili/internal/models/video"
 	adminRepo "LikeBili/internal/repository/admin"
+	repocoin "LikeBili/internal/repository/coin"
 	favRepo "LikeBili/internal/repository/favorites"
 	rpmessage "LikeBili/internal/repository/message"
 	rpvideo "LikeBili/internal/repository/video"
+	svccoin "LikeBili/internal/service/coin"
 	svcmessage "LikeBili/internal/service/message"
 	"LikeBili/internal/service/rank"
 	"LikeBili/internal/transcode"
@@ -53,6 +57,9 @@ func main() {
 	tokenTTL := time.Duration(cfg.TokenTTLDays) * 24 * time.Hour
 	jwtSvc := jwtlib.New(cfg.JWTSecret, tokenTTL)
 	favrepo := favRepo.NewRepository(db)
+	// 币模块装配：注册/登录时签到发币（auth 依赖 coin，需先构造）
+	coinRepo := repocoin.NewRepository(db)
+	coinSvc := svccoin.NewService(coinRepo)
 
 	r := gin.Default()
 	r.Use(middleware.CORS())
@@ -75,9 +82,13 @@ func main() {
 		&modelsQuality.VideoQuality{},
 		&modelsComments.VideoComments{},
 		&modelsComments.CommentLikes{},
+		&modelsCoins.Coin{},
+		&modelsCoins.UserCoin{},
 	)
-	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo)
+	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo, coinSvc)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
+	// 币模块路由：/video/:id/coin*（投币）+ /coin/balance（个人中心余额）
+	coinhandler.RegisterRoutes(api, db, jwtSvc, rdb)
 	// --- 视频模块装配 ---
 	broker := transcode.NewProgressBroker()
 	userBriefBuider := toresp.NewToRespBuilder(minio)                 // 转码进度广播器（前端 SSE 订阅用）

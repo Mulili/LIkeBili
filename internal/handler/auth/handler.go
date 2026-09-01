@@ -45,12 +45,15 @@ func (h *Handler) Register(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, codeErrors.CodeInvalid, vt.TranslateError(err))
 		return
 	}
-	// 第 3 步：调 Service 注册；成功返回用户信息与 token
-	resp, token, err := h.svc.Register(c.Request.Context(), &req)
+	// 第 3 步：调 Service 注册；成功返回用户信息、签到发放余额与 token
+	resp, balance, token, err := h.svc.Register(c.Request.Context(), &req)
 	if err != nil {
 		operation := "Register"
 		response.ErrorFrom(c, operation, err) // 统一错误出口：自动翻译业务码 + 日志
 		return
+	}
+	if balance != nil { // 仅本次真正发放硬币时带上余额；当天已领过则省略
+		resp.CoinBalance = &balance.Balance
 	}
 	h.setCookie(c, token) // 注册即登录：把 token 写进 HttpOnly Cookie
 	response.Created(c, resp)
@@ -69,11 +72,14 @@ func (h *Handler) Login(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, codeErrors.BadRequest, "账号或密码不能为空")
 		return
 	}
-	resp, token, err := h.svc.Login(c.Request.Context(), req.Account, req.Password)
+	resp, balance, token, err := h.svc.Login(c.Request.Context(), req.Account, req.Password)
 	if err != nil {
 		operation := "Login"
 		response.ErrorFrom(c, operation, err)
 		return
+	}
+	if balance != nil { // 当天已领过则省略余额字段
+		resp.CoinBalance = &balance.Balance
 	}
 	h.setCookie(c, token)
 	response.Success(c, resp)

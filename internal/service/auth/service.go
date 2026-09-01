@@ -4,10 +4,12 @@
 package auth
 
 import (
+	modelCoins "LikeBili/internal/models/coin"
 	modelsFavorites "LikeBili/internal/models/favorites"
 	usermodel "LikeBili/internal/models/user"
 	"LikeBili/internal/repository/auth"
 	"LikeBili/internal/repository/favorites"
+	svccoin "LikeBili/internal/service/coin"
 	codeErrors "LikeBili/pkg/errors"
 	jwtlib "LikeBili/pkg/jwt"
 	"LikeBili/pkg/logger"
@@ -26,25 +28,27 @@ import (
 // 包含注册、登录、获取当前用户信息、刷新 Token，以及 Token 在 Redis 中的生命周期管理。
 // 注意：当前没有 Logout 方法，"登出即失效 Token"（删除 auth:token:{userID}）的逻辑待补充。
 type Service struct {
-	repo     *auth.Repository      // 用户数据访问层：负责 users 表的查询与写入
-	rdb      *redis.Client         // Redis 客户端：缓存每个用户当前有效的 Token
-	favorite *favorites.Repository // 收藏夹数据访问层：注册时为新用户创建默认收藏夹
-	jwt      *jwtlib.JWT           // JWT 工具：生成与解析 Token
-	tokenTTL time.Duration         // Token 统一有效期（JWT 与 Redis 的 TTL 共用）
-	storage  *storage.MinIO        // 对象存储：把存储的对象名转换为可公开访问的 URL
+	repo      *auth.Repository      // 用户数据访问层：负责 users 表的查询与写入
+	rdb       *redis.Client         // Redis 客户端：缓存每个用户当前有效的 Token
+	favorite  *favorites.Repository // 收藏夹数据访问层：注册时为新用户创建默认收藏夹
+	jwt       *jwtlib.JWT           // JWT 工具：生成与解析 Token
+	tokenTTL  time.Duration         // Token 统一有效期（JWT 与 Redis 的 TTL 共用）
+	storage   *storage.MinIO        // 对象存储：把存储的对象名转换为可公开访问的 URL
+	sendCoins *svccoin.Service      //登录或注册时发放硬币
 }
 
 // NewService 创建认证服务实例。
 // 通过构造函数注入全部依赖（依赖倒置），便于在单元测试中替换为 mock 实现。
 // 参数依次为：用户数据仓库、数据库连接（预留事务）、Redis 客户端、JWT 工具、Token 过期时长、对象存储、收藏夹数据仓库。
-func NewService(repo *auth.Repository, rdb *redis.Client, jwt *jwtlib.JWT, tokenTTL time.Duration, storage *storage.MinIO, favorite *favorites.Repository) *Service {
+func NewService(repo *auth.Repository, rdb *redis.Client, jwt *jwtlib.JWT, tokenTTL time.Duration, storage *storage.MinIO, favorite *favorites.Repository, sendCoins *svccoin.Service) *Service {
 	return &Service{
-		repo:     repo,
-		rdb:      rdb,
-		jwt:      jwt,
-		tokenTTL: tokenTTL,
-		storage:  storage,
-		favorite: favorite,
+		repo:      repo,
+		rdb:       rdb,
+		jwt:       jwt,
+		tokenTTL:  tokenTTL,
+		storage:   storage,
+		favorite:  favorite,
+		sendCoins: sendCoins,
 	}
 }
 
@@ -59,32 +63,32 @@ func NewService(repo *auth.Repository, rdb *redis.Client, jwt *jwtlib.JWT, token
 //   - *usermodel.LoginResp: 登录响应（用户 ID、用户名、昵称、头像）
 //   - string: JWT Token
 //   - error: 业务错误（用户名已存在、邮箱已注册等）
-func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*usermodel.LoginResp, string, error) {
+func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*usermodel.LoginResp, *modelCoins.CoinBalanceResp, string, error) {
 	// ---------- 第一步：校验用户名唯一性 ----------
 	existing, err := s.repo.FindByUsername(c, request.Username)
 	if err != nil {
 		// 数据库查询异常，包裹原始错误以便日志追踪
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
 	}
 	if existing != nil {
 		// 用户名已被占用，返回预定义的业务错误
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", codeErrors.ErrUsernameExists)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", codeErrors.ErrUsernameExists)
 	}
 
 	// ---------- 第二步：校验邮箱唯一性 ----------
 	existing, err = s.repo.FindByEmail(c, request.Email)
 	if err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
 	}
 	if existing != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", codeErrors.ErrEmailExists)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", codeErrors.ErrEmailExists)
 	}
 
 	// ---------- 第三步：密码哈希处理 ----------
 	// 使用 bcrypt 对明文密码进行哈希，cost=12（计算强度，越高越安全但越慢）
 	hash, err := bcrypt.GenerateFromPassword([]byte(request.Password), 12)
 	if err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
 	}
 
 	// ---------- 第四步：构建用户对象并写入数据库 ----------
@@ -95,20 +99,20 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 		Nickname:     request.Username, // 默认昵称与用户名相同
 	}
 	if err := s.repo.Create(c, user); err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
 	}
 
 	// ---------- 第五步：生成 JWT Token ----------
 	token, err := s.jwt.GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Register: %w", err)
 	}
 
 	// ---------- 第六步：Token 缓存到 Redis ----------
 	// Redis key 格式：auth:token:{userID}，用于登出时失效 Token
 	rdbKey := fmt.Sprintf("auth:token:%d", user.ID)
 	if err := s.rdb.Set(c, rdbKey, token, s.tokenTTL).Err(); err != nil {
-		logger.Warn("Redis 不可用，跳过 token 缓存", zap.String("operation", "Login"), zap.Error(err))
+		logger.Warn("Redis 不可用，跳过 token 缓存", zap.String("operation", "Register"), zap.Error(err))
 
 	}
 	// ---------- 第七步：为新用户创建默认收藏夹 ----------
@@ -124,17 +128,21 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 			IsPublic: 1,
 		})
 	}
-
+	//第八步：注册成功后发送硬币，如果不能发放先降级等待下次登录时发放
+	balance, err := s.sendCoins.SendCoins(c, user.ID)
+	if err != nil {
+		logger.Warn("无法为新用户发放硬币", zap.Uint("userid", user.ID), zap.Error(err))
+	}
 	userAvatar := s.storage.URL(user.Avatar)
 
-	// ---------- 第八步：组装响应返回 ----------
+	// ---------- 第九步：组装响应返回 ----------
 	resp := &usermodel.LoginResp{
 		ID:       user.ID,
 		Username: user.Username,
 		Nickname: user.Nickname,
 		Avatar:   userAvatar,
 	}
-	return resp, token, nil
+	return resp, balance, token, nil
 }
 
 // Login 处理用户登录业务。
@@ -148,30 +156,30 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 //   - *usermodel.LoginResp: 登录响应
 //   - string: JWT Token
 //   - error: 业务错误（用户不存在 / 密码错误 / 账号被封禁等）
-func (s *Service) Login(c context.Context, account, password string) (*usermodel.LoginResp, string, error) {
+func (s *Service) Login(c context.Context, account, password string) (*usermodel.LoginResp, *modelCoins.CoinBalanceResp, string, error) {
 	user, err := s.repo.FindByUsernameOrEmail(c, account)
 	if err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", err)
 	}
 	if user == nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrUserNotFound)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrUserNotFound)
 	}
 	if user.Status == -1 {
 		// 账号处于封禁状态（Status=-1），拒绝登录并返回封禁业务错误
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrCodeUserIsBan)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrCodeUserIsBan)
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrWrongPassword)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.ErrWrongPassword)
 	}
 	token, err := s.jwt.GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", err)
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", err)
 	}
 
 	rdbkey := fmt.Sprintf("auth:token:%d", user.ID)
 	if err := s.rdb.Set(c, rdbkey, token, s.tokenTTL).Err(); err != nil {
-		return nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.Wrap(err, codeErrors.CodeInternal, "服务器繁忙,请稍后重试"))
+		return nil, nil, "", fmt.Errorf("Method:auth.service.Login: %w", codeErrors.Wrap(err, codeErrors.CodeInternal, "服务器繁忙,请稍后重试"))
 	}
 	userAvatar := s.storage.URL(user.Avatar)
 	resp := &usermodel.LoginResp{
@@ -180,7 +188,12 @@ func (s *Service) Login(c context.Context, account, password string) (*usermodel
 		Nickname: user.Nickname,
 		Avatar:   userAvatar,
 	}
-	return resp, token, nil
+	//登录时发放硬币，如果不能发放则降级暂不发放，等待下次登录
+	balance, err := s.sendCoins.SendCoins(c, user.ID)
+	if err != nil {
+		logger.Warn("无法为用户发放硬币", zap.Uint("userid", user.ID), zap.Error(err))
+	}
+	return resp, balance, token, nil
 }
 
 func (s *Service) Logout(c context.Context, userID uint) error {

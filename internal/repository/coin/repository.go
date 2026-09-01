@@ -26,9 +26,10 @@ func NewRepository(db *gorm.DB) *Repository {
 
 // SendDailyCoins 签到发币：仅"今天未签到"时给该用户 +2 币，并推进 last_coin_grant 到今天。
 // 幂等关键：WHERE 带 last_coin_grant 条件（IS NULL 覆盖新用户 / < today 覆盖老用户），
-// 今天已签到过则影响 0 行返回 0，无需先查后更，避免并发下重复发币。
-// 返回值为本次实际发放的币数（0 = 今天已签过，2 = 本次签到发放）。
-func (r *Repository) SendDailyCoins(c context.Context, userID uint) (uint, error) {
+// 今天已签到过则影响 0 行，无需先查后更，避免并发下重复发币。
+// 返回值：始终返回最新钱包（service 直接取 Balance 构造响应，省一次回查）；
+// count 为本次实际发放数（0 = 今天已签过，2 = 本次签到发放）。
+func (r *Repository) SendDailyCoins(c context.Context, userID uint) (*modelsCoins.UserCoin, uint, error) {
 	now := time.Now()
 	// ① 今天零点：作为"是否已签"的边界，last_coin_grant < today 即代表今天未签
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
@@ -42,13 +43,19 @@ func (r *Repository) SendDailyCoins(c context.Context, userID uint) (uint, error
 			"last_coin_grant": today,
 		})
 	if result.Error != nil {
-		return 0, fmt.Errorf("Method:coin.repository.SendDailyCoins: %w", result.Error)
+		return nil, 0, fmt.Errorf("Method:coin.repository.SendDailyCoins: %w", result.Error)
+	}
+
+	var userCoin modelsCoins.UserCoin
+	if err := r.db.WithContext(c).Model(&modelsCoins.UserCoin{}).
+		Where("user_id = ?", userID).First(&userCoin).Error; err != nil {
+		return nil, 0, fmt.Errorf("Method:coin.repository.SendDailyCoins: %w", err)
 	}
 	// ③ 影响 0 行 = 今天已签到过，不重复发（由调用方区分是否提示"今日已领取"）
 	if result.RowsAffected == 0 {
-		return 0, nil
+		return &userCoin, 0, nil
 	}
-	return modelsCoins.SendCoins, nil
+	return &userCoin, modelsCoins.SendCoins, nil
 }
 
 // DropCoins 投币：扣投币者余额 → 给视频作者加币 → 维护投币流水（同一视频累计 ≤2）。
@@ -183,7 +190,6 @@ func (r *Repository) GetOrCreateWallet(c context.Context, userID uint) (*modelsC
 	return &wallet, nil
 }
 
-// ======================================辅助逻辑=====================================
 // FindBalance 按钱包记录主键查询当前余额（userCoinID 是 user_coins 表的 id，不是 user_id）。
 // 调用方需先通过 user_id 取得钱包记录拿到主键；查不到时返回 0 而非错误，由 service 判空。
 func (r *Repository) FindBalance(c context.Context, userCoinID uint) (uint, error) {

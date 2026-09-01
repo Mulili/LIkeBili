@@ -31,6 +31,8 @@ type LoginResp struct {
 	Username string `json:"username"`
 	Nickname string `json:"nickname"`
 	Avatar   string `json:"avatar"`
+	// 本次登录/注册签到发放后的硬币余额；当天已领过则不返回（nil → json 省略该字段）
+	CoinBalance *uint `json:"coin_balance,omitempty"`
 }
 
 //详细信息
