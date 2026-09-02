@@ -246,3 +246,23 @@ func (r *Repository) HardDeleteExpiredTx(c context.Context, videoIDs []uint) err
 		return nil
 	})
 }
+
+// TopByViews 按播放量取 TopN 视频 ID（热门榜 Redis 冷启动时的 DB 兜底排序）。
+// 只取审核成功（status=2）且公开（view_status=1）的视频，按播放量降序截取前 top 个。
+// 兜底口径说明：DB 目前只有 Views 计数，无法复刻 Redis 的加权热度（播放/点赞/评论/投币），
+// 作为冷启动过渡方案够用；Redis 有埋点数据后以 HotRank 结果为准。
+func (r *Repository) TopByViews(c context.Context, top int) ([]uint, error) {
+	if top <= 0 {
+		return nil, nil
+	}
+	var ids []uint
+	if err := r.db.WithContext(c).
+		Model(&modelsVideo.Video{}).
+		Where("status = ? AND view_status = ?", 2, 1).
+		Order("views DESC").
+		Limit(top).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, fmt.Errorf("Method:video.repository.TopByViews: %w", err)
+	}
+	return ids, nil
+}

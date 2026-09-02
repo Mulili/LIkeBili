@@ -6,6 +6,7 @@ import (
 	coinhandler "LikeBili/internal/handler/coin"
 	commenthandler "LikeBili/internal/handler/comment"
 	likehandler "LikeBili/internal/handler/like"
+	rankhandler "LikeBili/internal/handler/rank"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
 	"LikeBili/internal/middleware"
@@ -35,6 +36,7 @@ import (
 	"LikeBili/pkg/storage"
 	"LikeBili/pkg/toresp"
 	"LikeBili/pkg/validator"
+	"context"
 	"encoding/json"
 	"log"
 	"time"
@@ -54,13 +56,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("minio failed: %v", err)
 	}
+	// 热度排行榜服务
+	rankSvc := rank.NewService(rdb)
 	tokenTTL := time.Duration(cfg.TokenTTLDays) * 24 * time.Hour
 	jwtSvc := jwtlib.New(cfg.JWTSecret, tokenTTL)
 	favrepo := favRepo.NewRepository(db)
 	// 币模块装配：注册/登录时签到发币（auth 依赖 coin，需先构造）
 	coinRepo := repocoin.NewRepository(db)
-	coinSvc := svccoin.NewService(coinRepo)
-
+	coinSvc := svccoin.NewService(coinRepo, rankSvc)
 	r := gin.Default()
 	r.Use(middleware.CORS())
 	api := r.Group("api/v1")
@@ -87,19 +90,23 @@ func main() {
 	)
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo, coinSvc)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
-	// 币模块路由：/video/:id/coin*（投币）+ /coin/balance（个人中心余额）
-	coinhandler.RegisterRoutes(api, db, jwtSvc, rdb)
 	// --- 视频模块装配 ---
 	broker := transcode.NewProgressBroker()
 	userBriefBuider := toresp.NewToRespBuilder(minio)                 // 转码进度广播器（前端 SSE 订阅用）
 	toVideoResp := toresp.NewVideoRespBuilder(minio, userBriefBuider) // 视频 DTO 转换器
-	// 热度排行榜服务
-	rankSvc := rank.NewService(rdb)
+
 	adminRepo := adminRepo.NewRepository(db) // 审核记录查询器（作者端驳回原因展示）
 	//--- 点赞模块装配：notifier 复用 message 服务，rank 复用热度服务 ---
 	msgRepo := rpmessage.NewRepository(db)
 	msgSvc := svcmessage.NewService(msgRepo, rdb, userBriefBuider)
 	likehandler.RegisterRoutes(api, db, rdb, msgSvc, rankSvc, jwtSvc)
+	// 币模块路由：/video/:id/coin*（投币）+ /coin/balance（个人中心余额）
+	coinhandler.RegisterRoutes(api, db, jwtSvc, rdb, rankSvc)
+	// 热门榜路由：GET /rank/hot?window=day|week|month&top=20（公开）
+	// 冷启动兜底：Redis 无埋点数据时按播放量取 TopN（DB 只有 Views 计数，过渡方案）
+	rankhandler.RegisterRoutes(api, rankSvc, func(ctx context.Context, top int) ([]uint, error) {
+		return rpvideo.NewRepository(db).TopByViews(ctx, top)
+	})
 	// --- RabbitMQ 转码异步化装配 ---
 	// 链路：上传 → publishFn 投递任务到 MQ → 消费者 goroutine 拉取 → transcode.ProcessVideo 执行真实转码。
 	// 降级策略：MQ 不可用时整体退化为本地转码（不启动消费者、publishFn 保持 nil，

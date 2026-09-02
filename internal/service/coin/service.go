@@ -3,20 +3,25 @@ package coin
 import (
 	modelsCoins "LikeBili/internal/models/coin"
 	repocoin "LikeBili/internal/repository/coin"
+	"LikeBili/internal/service/rank"
 	codeErrors "LikeBili/pkg/errors"
+	"LikeBili/pkg/logger"
 	"context"
 	"fmt"
+
+	"go.uber.org/zap"
 )
 
 // Service 币模块的业务逻辑层：编排签到发币、投币、余额与投币状态查询。
 // 职责边界：只做"调仓库 + 组装响应"，事务、幂等、上限校验等原子性逻辑全部下沉到 Repository。
 type Service struct {
 	repo *repocoin.Repository // 币数据访问层：user_coins（钱包）与 coins（投币流水）
+	rank *rank.Service
 }
 
 // NewService 构造币服务，注入币仓储。
-func NewService(repo *repocoin.Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo *repocoin.Repository, rank *rank.Service) *Service {
+	return &Service{repo: repo, rank: rank}
 }
 
 // SendCoins 签到发币：登录/注册时触发，确保钱包存在后执行"当天签到发放"。
@@ -56,6 +61,10 @@ func (s *Service) DropCoins(c context.Context, userID uint, req *modelsCoins.Coi
 	// ② 执行投币事务（失败时错误已在仓库层翻译为业务码：视频不存在/币不足/已达上限）
 	if err := s.repo.DropCoins(c, req.VideoID, userID, req.Count); err != nil {
 		return nil, fmt.Errorf("Method:coin.service.DropCoins: %w", err)
+	}
+	//投币埋点，计算投币热度
+	if err := s.rank.Incr(c, req.VideoID, rank.DeltaCoin); err != nil {
+		logger.Warn("投币热度埋点失败", zap.Uint("video_id", req.VideoID), zap.Error(err))
 	}
 	// ③ 投币后该用户对该视频的累计投币数（刚投过必有记录，不会为 nil）
 	coin, err := s.repo.FindUserDrop(c, req.VideoID, userID)

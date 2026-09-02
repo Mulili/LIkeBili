@@ -24,12 +24,15 @@ func NewService(rdb *redis.Client) *Service {
 	return &Service{rdb: rdb}
 }
 
-// 互动行为的热度权重：播放 1.5、点赞 2.0、评论 2.5（按产品策略可调）。
+// 互动行为的热度权重（按产品策略可调）：
+// 播放 1.5（低门槛，人人产生）→ 点赞 2.0 → 评论 2.5 → 评论点赞 1.0 →
+// 投币 6.0（最高档：用户每天仅 2 币，稀缺性强意图，最能代表热门）。
 const (
 	DeltaComent = 1.0
 	DeltaViews  = 1.5
 	DeltaLike   = 2.0
 	DeltaReply  = 2.5
+	DeltaCoin   = 6.0
 
 	// 榜单时间窗口：日/周/月，Handler 与前端共用的唯一口径
 	WindowDay   = 24 * time.Hour
