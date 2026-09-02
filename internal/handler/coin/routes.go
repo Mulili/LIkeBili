@@ -4,6 +4,7 @@ import (
 	"LikeBili/internal/middleware"
 	repocoins "LikeBili/internal/repository/coin"
 	svccoins "LikeBili/internal/service/coin"
+	"LikeBili/internal/service/rank"
 	"LikeBili/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
@@ -17,9 +18,9 @@ import (
 //   - 用户维度 /coin/balance：当前登录用户的余额（与视频无关，供个人中心调用）
 //
 // 写操作（投币）与私有查询（投币状态、余额）统一挂 AuthRequired；投币总数游客可看。
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, jwt *jwt.JWT, rdb *redis.Client) {
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, jwt *jwt.JWT, rdb *redis.Client, rank *rank.Service) {
 	rp := repocoins.NewRepository(db)
-	svc := svccoins.NewService(rp)
+	svc := svccoins.NewService(rp, rank)
 	h := NewHandler(svc)
 
 	middle := middleware.AuthRequired(jwt, rdb)
