@@ -8,8 +8,9 @@ import (
 // 请求体
 // CreateHistoryReq 创建/更新观看历史请求体。
 type CreateHistoryReq struct {
-	VideoID  uint `json:"video_id" validate:"required"` // 视频 ID
-	Progress uint `json:"progress"`                     // 观看进度（秒）
+	VideoID  uint    `json:"video_id" validate:"required"` // 视频 ID
+	Progress uint    `json:"progress"`                     // 观看进度（秒）
+	Duration float64 `json:"duration,omitempty"`           // 视频总时长（秒）
 }
 
 // 响应体

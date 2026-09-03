@@ -147,7 +147,7 @@ func (r *Repository) ListPublic(ctx context.Context) ([]modelsVideo.Video, error
 
 // 更新视频时长，用于异步上传视频
 func (r *Repository) UpdateDuration(c context.Context, videoid uint, duration uint) error {
-	result := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("ID = ? and duration = 0").Update("duration", duration) //仅在时长为0时修改
+	result := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("id = ? and duration = 0").Update("duration", duration) //仅在时长为0时修改
 	if result.Error != nil {
 		return fmt.Errorf("Method:video.repository.UpdateDuration: %w", result.Error)
 	}
