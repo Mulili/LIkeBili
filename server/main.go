@@ -5,6 +5,7 @@ import (
 	authhandler "LikeBili/internal/handler/auth"
 	coinhandler "LikeBili/internal/handler/coin"
 	commenthandler "LikeBili/internal/handler/comment"
+	historyhandler "LikeBili/internal/handler/history"
 	likehandler "LikeBili/internal/handler/like"
 	rankhandler "LikeBili/internal/handler/rank"
 	userhandler "LikeBili/internal/handler/user"
@@ -151,6 +152,10 @@ func main() {
 	videohandler.RegisterRoutes(api, db, rdb, toVideoResp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo)
 	//通知模块装配
 	commenthandler.RegisterRoutes(api, db, rdb, msgSvc, userBriefBuider, rankSvc, jwtSvc)
+	// --- 观看历史模块装配（登录用户私有数据） ---
+	// 路由：POST /history 上报进度、GET /history 分页列表；
+	// 依赖 toVideoResp 统一转换内嵌的视频信息（封面/头像 URL 规则一致）
+	historyhandler.RegisterRoutes(api, db, rdb, jwtSvc, toVideoResp)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
 	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)
