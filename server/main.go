@@ -5,6 +5,7 @@ import (
 	authhandler "LikeBili/internal/handler/auth"
 	coinhandler "LikeBili/internal/handler/coin"
 	commenthandler "LikeBili/internal/handler/comment"
+	followhandler "LikeBili/internal/handler/follow"
 	historyhandler "LikeBili/internal/handler/history"
 	likehandler "LikeBili/internal/handler/like"
 	rankhandler "LikeBili/internal/handler/rank"
@@ -14,6 +15,8 @@ import (
 	modelsCoins "LikeBili/internal/models/coin"
 	modelsComments "LikeBili/internal/models/comments"
 	modelsFavorites "LikeBili/internal/models/favorites"
+	modelsFollow "LikeBili/internal/models/follow"
+	modelsHistory "LikeBili/internal/models/history"
 	modelsMeta "LikeBili/internal/models/meta"
 	modelsQuality "LikeBili/internal/models/quality"
 	modelsReview "LikeBili/internal/models/review"
@@ -88,6 +91,8 @@ func main() {
 		&modelsComments.CommentLikes{},
 		&modelsCoins.Coin{},
 		&modelsCoins.UserCoin{},
+		&modelsFollow.Follow{},
+		&modelsHistory.UserHistory{},
 	)
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo, coinSvc)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
@@ -156,6 +161,12 @@ func main() {
 	// 路由：POST /history 上报进度、GET /history 分页列表；
 	// 依赖 toVideoResp 统一转换内嵌的视频信息（封面/头像 URL 规则一致）
 	historyhandler.RegisterRoutes(api, db, rdb, jwtSvc, toVideoResp)
+	// --- 关注模块装配 ---
+	// 路由：POST/DELETE /users/:id/follow（关注、取关/回关，需登录）、
+	//       GET /users/:id/followings|followers（关注/粉丝列表，公开可看）；
+	// notifier 复用 message 服务（通用 SendNotification + MsgTypeFollow=3），
+	// userBriefBuider 负责列表行内用户信息转换（与全站头像 URL 规则一致）
+	followhandler.RegisterRoutes(api, db, rdb, msgSvc, userBriefBuider, jwtSvc)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
 	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)
