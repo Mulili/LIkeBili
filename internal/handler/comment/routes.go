@@ -15,22 +15,24 @@ import (
 )
 
 // RegisterRoutes 注册评论模块路由，统一挂在 /videos/:id/comments 前缀下。
-// 读接口（公开，游客可访问）：根评论列表、子评论分页；
+// 读接口（公开，游客可访问）：根评论列表、子评论分页——挂可选鉴权，
+//   登录用户才会填充 IsLiked（游客/失效 token 按游客处理，不拦截）；
 // 写接口（AuthRequired）：发表评论、评论点赞、删除评论。
 func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, notifier *message.Service, toresp *toresp.UserBriefRespBuilder, rank *rank.Service, jwt *jwt.JWT) {
 	repo := repocomment.NewRepository(db)
 	svc := svccomment.NewService(repo, rdb, notifier, toresp, rank)
 	h := NewHandler(svc)
 
-	// 写操作统一挂登录鉴权中间件；读接口游客可访问，不挂
+	// 写操作挂强制鉴权；读接口游客可访问，挂可选鉴权（仅用于填充 IsLiked 等个性化字段）
 	middle := middleware.AuthRequired(jwt, rdb)
+	optional := middleware.OptionalAuth(jwt, rdb)
 
 	comm := r.Group("/videos/:id/comments")
 	{
-		// 公开读：根评论分页列表（每条内嵌前 5 条回复预览 + 回复总数）
-		comm.GET("", h.GetComments)
-		// 公开读：某根评论下的子评论分页（楼中楼"加载更多"）
-		comm.GET("/:root_id/replies", h.GetReplies)
+		// 公开读：根评论分页列表（每条内嵌前 5 条回复预览 + 回复总数，登录用户填 IsLiked）
+		comm.GET("", optional, h.GetComments)
+		// 公开读：某根评论下的子评论分页（楼中楼"加载更多"，登录用户填 IsLiked）
+		comm.GET("/:root_id/replies", optional, h.GetReplies)
 
 		// 登录写：发表评论/回复（ParentID=0 为根评论）
 		comm.POST("", middle, h.Create)
