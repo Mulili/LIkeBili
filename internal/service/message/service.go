@@ -36,16 +36,9 @@ func (s *Service) GetAllNotifications(c context.Context, page, pageSize int, use
 	if err != nil {
 		return nil, fmt.Errorf("Method:message.service.GetAllNotification: %w", err)
 	}
-	unreadCount, err := s.repo.UnreadCount(c, userID)
+	unreadCount, err := s.UnreadCount(c, userID)
 	if err != nil {
 		return nil, fmt.Errorf("Method:message.service.GetAllNotification: %w", err)
-	}
-	//判断redis中未读数缓存是否比数据库中大，谁大拿谁
-	if s.rdb != nil {
-		rdbKey := fmt.Sprintf("unread:%d", userID)
-		if count, err := s.rdb.Get(c, rdbKey).Int64(); err == nil && count > unreadCount {
-			unreadCount = count
-		}
 	}
 
 	listResp := make([]modelsMessage.MessageResp, len(list))
@@ -77,6 +70,23 @@ func (s *Service) GetAllNotifications(c context.Context, page, pageSize int, use
 		PageSize: pageSize,
 		Unread:   unreadCount,
 	}, nil
+}
+
+// UnreadCount 计算用户未读数，供通知列表红点与个人中心聚合复用。
+// 口径：以 DB 统计为准；Redis 缓存（unread:{userID}）更大时取缓存值
+// （写路径 INCR 领先于 DB，缓存可能暂超 DB，取较小值会让红点少算）。
+func (s *Service) UnreadCount(c context.Context, userID uint) (int64, error) {
+	unreadCount, err := s.repo.UnreadCount(c, userID)
+	if err != nil {
+		return 0, fmt.Errorf("Method:message.service.UnreadCount: %w", err)
+	}
+	if s.rdb != nil {
+		rdbKey := fmt.Sprintf("unread:%d", userID)
+		if count, err := s.rdb.Get(c, rdbKey).Int64(); err == nil && count > unreadCount {
+			unreadCount = count
+		}
+	}
+	return unreadCount, nil
 }
 
 // UpdateAllIsRead 一键全部已读：DB 全部置已读后，将 Redis 未读缓存清零。

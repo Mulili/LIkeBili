@@ -173,6 +173,11 @@ func httpStatusForCode(code int) int {
 		return http.StatusNotFound
 	case codeErrors.CodeFavoriteForbidden:
 		return http.StatusForbidden
+	// 名称冲突：同名收藏夹已存在 → 409；使用保留名（默认收藏夹）→ 400（请求本身不合法）
+	case codeErrors.CodeFavoriteNameExists:
+		return http.StatusConflict
+	case codeErrors.CodeFavoriteNameReserved:
+		return http.StatusBadRequest
 	// ---- 未知错误码：保守按服务器错误处理 ----
 	default:
 		return http.StatusInternalServerError

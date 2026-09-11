@@ -124,7 +124,7 @@ func (s *Service) Register(c context.Context, request *usermodel.RegisterReq) (*
 		// 不存在则插入一条默认收藏夹记录（is_public=1 公开，所有用户可见）
 		s.favorite.Create(c, &modelsFavorites.Favorites{
 			UserID:   user.ID,
-			Name:     "默认收藏夹",
+			Name:     modelsFavorites.DefaultFavoriteName,
 			IsPublic: 1,
 		})
 	}

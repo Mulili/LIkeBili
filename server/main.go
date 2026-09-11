@@ -5,9 +5,12 @@ import (
 	authhandler "LikeBili/internal/handler/auth"
 	coinhandler "LikeBili/internal/handler/coin"
 	commenthandler "LikeBili/internal/handler/comment"
+	favoriteshandler "LikeBili/internal/handler/favorites"
 	followhandler "LikeBili/internal/handler/follow"
 	historyhandler "LikeBili/internal/handler/history"
 	likehandler "LikeBili/internal/handler/like"
+	messagehandler "LikeBili/internal/handler/message"
+	profilehandler "LikeBili/internal/handler/profile"
 	rankhandler "LikeBili/internal/handler/rank"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
@@ -81,6 +84,7 @@ func main() {
 	db.AutoMigrate(
 		&modelsUser.User{},
 		&modelsFavorites.Favorites{},
+		&modelsFavorites.FavoritesItem{},
 		&modelsVideo.Category{},
 		&modelsVideo.Video{},
 		&modelsReview.VideoReview{},
@@ -167,6 +171,19 @@ func main() {
 	// notifier 复用 message 服务（通用 SendNotification + MsgTypeFollow=3），
 	// userBriefBuider 负责列表行内用户信息转换（与全站头像 URL 规则一致）
 	followhandler.RegisterRoutes(api, db, rdb, msgSvc, userBriefBuider, jwtSvc)
+	// --- 收藏夹模块装配 ---
+	// 路由：POST/GET /favorites（创建、我的收藏夹）、GET/POST /favorites/:id/items（详情、收藏/取消）、
+	//       GET /users/:id/favorites（他人公开收藏夹）；
+	// minio 用于收藏夹封面预签名 URL，toVideoResp 统一转换夹内视频条目（URL 规则全站一致）
+	favoriteshandler.RegisterRoutes(api, db, rdb, minio, toVideoResp, jwtSvc)
+	// --- 个人中心模块装配（聚合接口） ---
+	// 路由：GET /users/:id/profile（公开 + 可选鉴权）——
+	// 一次返回资料 + 关注数/粉丝数/收藏夹数/投稿数；本人访问额外带硬币余额与历史条数
+	profilehandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
+	// --- 消息（通知）模块装配 ---
+	// 路由：GET /messages（列表 + 未读数）、POST /messages/read-all（全部已读）、
+	//       POST /messages/:id/read（单条已读）；通知只属于接收者本人，整组需登录
+	messagehandler.RegisterRoutes(api, db, rdb, userBriefBuider, jwtSvc)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
 	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)

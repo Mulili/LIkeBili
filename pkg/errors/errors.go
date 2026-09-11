@@ -62,22 +62,26 @@ const (
 	CodeCoinsLowBalance      = 40011
 	CodeCoinsMaxCount        = 40012
 	//favorite状态码
-	CodeFavoriteNotFound  = 60001
-	CodeFavoriteForbidden = 60002
+	CodeFavoriteNotFound     = 60001
+	CodeFavoriteForbidden    = 60002
+	CodeFavoriteNameExists   = 60003
+	CodeFavoriteNameReserved = 60004
 )
 
 var (
-	ErrUsernameExists    = &Error{Code: CodeUsernameExists, Message: "用户名已存在"}
-	ErrEmailExists       = &Error{Code: CodeEmailExists, Message: "邮箱已被注册"}
-	ErrUserNotFound      = &Error{Code: CodeUserNotFound, Message: "用户不存在"}
-	ErrWrongPassword     = &Error{Code: CodeWrongPassword, Message: "密码错误"}
-	ErrPasswordsNotMatch = &Error{Code: CodePasswordsNotMatch, Message: "两次密码不一致"}
-	ErrFavoriteNotFound  = &Error{Code: CodeFavoriteNotFound, Message: "收藏夹不存在"}
-	ErrFavoriteForbidden = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
-	ErrTokenInvalid      = &Error{Code: CodeTokenInvalid, Message: "令牌无效"}
-	ErrTokenExpired      = &Error{Code: CodeTokenExpired, Message: "令牌已过期"}
-	ErrUnauthorized      = &Error{Code: CodeUnauthorized, Message: "无法获取资源，请先登录"}
-	ErrCodeUserIsBan     = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
+	ErrUsernameExists       = &Error{Code: CodeUsernameExists, Message: "用户名已存在"}
+	ErrEmailExists          = &Error{Code: CodeEmailExists, Message: "邮箱已被注册"}
+	ErrUserNotFound         = &Error{Code: CodeUserNotFound, Message: "用户不存在"}
+	ErrWrongPassword        = &Error{Code: CodeWrongPassword, Message: "密码错误"}
+	ErrPasswordsNotMatch    = &Error{Code: CodePasswordsNotMatch, Message: "两次密码不一致"}
+	ErrFavoriteNotFound     = &Error{Code: CodeFavoriteNotFound, Message: "收藏夹不存在"}
+	ErrFavoriteForbidden    = &Error{Code: CodeFavoriteForbidden, Message: "无权访问该收藏夹"}
+	ErrFavoriteNameExists   = &Error{Code: CodeFavoriteNameExists, Message: "收藏夹名称已存在"}
+	ErrFavoriteNameReserved = &Error{Code: CodeFavoriteNameReserved, Message: "收藏夹名称不可使用"}
+	ErrTokenInvalid         = &Error{Code: CodeTokenInvalid, Message: "令牌无效"}
+	ErrTokenExpired         = &Error{Code: CodeTokenExpired, Message: "令牌已过期"}
+	ErrUnauthorized         = &Error{Code: CodeUnauthorized, Message: "无法获取资源，请先登录"}
+	ErrCodeUserIsBan        = &Error{Code: CodeUserIsBan, Message: "该用户已被封禁"}
 	// 注册竞态兜底错误：并发注册时唯一索引冲突（MySQL 1062）统一返回该错误
 	ErrUsernameOrEmailExists = &Error{Code: CodeUsernameOrEmailExists, Message: "用户名或邮箱重复"}
 	ErrCodeInvalid           = &Error{Code: CodeInvalid, Message: "输入的参数无法校验"}

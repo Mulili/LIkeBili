@@ -131,3 +131,25 @@ func (r *Repository) FindNickname(c context.Context, userID uint) (string, error
 	}
 	return name, nil
 }
+
+// CountFollowing 统计该用户关注了多少人（关注数），供个人中心聚合展示。
+// 走 idx_follower_created(follower_id, created_at)，只扫索引不回表。
+func (r *Repository) CountFollowing(c context.Context, userID uint) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(c).Model(&modelsFollow.Follow{}).
+		Where("follower_id = ?", userID).Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("Method:follow.repository.CountFollowing: %w", err)
+	}
+	return count, nil
+}
+
+// CountFollowers 统计该用户有多少粉丝（粉丝数），供个人中心聚合展示。
+// 走 idx_followee_created(followee_id, created_at)。
+func (r *Repository) CountFollowers(c context.Context, userID uint) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(c).Model(&modelsFollow.Follow{}).
+		Where("followee_id = ?", userID).Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("Method:follow.repository.CountFollowers: %w", err)
+	}
+	return count, nil
+}

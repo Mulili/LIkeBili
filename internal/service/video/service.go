@@ -433,7 +433,10 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 	}, nil
 }
 
-func (s *Service) ListUserVideos(c context.Context, userID uint, status *uint8, page, pageSize int) (*modelsVideo.ListVideo, error) {
+// ListUserVideos 分页查询某用户的投稿列表。
+// onlyPublic=true 时只返回"审核通过 + 公开"的作品（他人/游客视角），
+// 由 handler 依据登录态判定：本人看全部（可用 status 分类），他人只看公开。
+func (s *Service) ListUserVideos(c context.Context, userID uint, status *uint8, onlyPublic bool, page, pageSize int) (*modelsVideo.ListVideo, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -441,7 +444,7 @@ func (s *Service) ListUserVideos(c context.Context, userID uint, status *uint8, 
 		pageSize = 16
 	}
 
-	videos, total, err := s.repo.FindListByUser(c, userID, page, pageSize, status)
+	videos, total, err := s.repo.FindListByUser(c, userID, page, pageSize, status, onlyPublic)
 	if err != nil {
 		return nil, fmt.Errorf("Method:video.Service.ListUserVideos: %w", err)
 	}

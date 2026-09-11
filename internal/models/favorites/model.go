@@ -16,6 +16,11 @@ func (Favorites) TableName() string {
 	return "favorites"
 }
 
+// DefaultFavoriteName 默认收藏夹名称。
+// 用户首次打开收藏夹时自动创建；同时是保留名——用户不可手动创建同名收藏夹，
+// 否则"默认收藏夹"的查找语义会被破坏。查找、创建、创建前校验三处共用本常量。
+const DefaultFavoriteName = "默认收藏夹"
+
 // FavoritesItem 收藏夹-视频关联记录。
 // 对应数据库 favorite_items 表，记录某个收藏夹中收藏了哪些视频。
 // 使用联合唯一索引 (favorites_id, video_id)，防止同一个视频被重复收藏到同一收藏夹。

@@ -89,19 +89,22 @@ func (r *Repository) FindList(c context.Context, page, pageSize uint, categoryId
 	return videos, total, nil
 }
 
-// 查询用户视频
-func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8) ([]modelsVideo.Video, int64, error) {
+// 查询用户视频。
+// onlyPublic=true（他人/游客视角）：只返回"审核通过(status=2) + 公开(view_status=1)"的作品，忽略 status 参数；
+// onlyPublic=false（本人视角）：返回全部未删除作品；status 非 nil 时再按状态分类筛选
+// （前端传 ?status= 查看"已通过/审核中/未通过"，不传则含全部）。
+func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSize int, status *uint8, onlyPublic bool) ([]modelsVideo.Video, int64, error) {
 	var videos []modelsVideo.Video
 	var total int64
 
 	query := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("user_id = ?", userid)
 
-	//若是传参则使用传入的参数进行判断
-	if status != nil {
+	if onlyPublic {
+		// 他人/游客视角：只暴露审核通过且公开的作品，避免待审核/私密视频的元信息泄露
+		query = query.Where("status = ? AND view_status = ?", 2, 1)
+	} else if status != nil {
+		// 本人视角：按状态分类筛选
 		query = query.Where("status = ?", *status)
-	} else {
-		//不传参时默认不查询审核失败的视频
-		query = query.Where("status != ?", 3)
 	}
 	//统计查询到的视频总数
 	if err := query.Count(&total).Error; err != nil {
@@ -114,6 +117,22 @@ func (r *Repository) FindListByUser(c context.Context, userid uint, page, pageSi
 		return nil, 0, fmt.Errorf("Method:video.repository.FindListByUser: %w", query.Error)
 	}
 	return videos, total, nil
+}
+
+// CountUserVideos 统计用户的投稿数，供个人中心聚合展示（不取明细）。
+// onlyPublic=true 只统计"审核通过(status=2) + 公开(view_status=1)"的投稿（他人主页视角）；
+// false 统计全部未删除投稿（本人视角，含待审核与私密）。软删除由 GORM 默认 scope 排除。
+func (r *Repository) CountUserVideos(c context.Context, userID uint, onlyPublic bool) (int64, error) {
+	query := r.db.WithContext(c).Model(&modelsVideo.Video{}).Where("user_id = ?", userID)
+	if onlyPublic {
+		query = query.Where("status = ? AND view_status = ?", 2, 1)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("Method:video.repository.CountUserVideos: %w", err)
+	}
+	return count, nil
 }
 
 // 按状态查询视频

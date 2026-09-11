@@ -33,19 +33,20 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *
 	)
 	handler := NewHandler(svc)
 
-	// ② 鉴权中间件：写操作专用
+	// ② 鉴权中间件：写操作强制登录；作品列表用可选鉴权（区分"本人看全部/他人看公开"）
 	auth := middleware.AuthRequired(jwtSvc, rdb)
+	optional := middleware.OptionalAuth(jwtSvc, rdb)
 
 	// ③ 路由注册
 	// 注意：/hot、/hot-rank 等静态路径必须注册在 /:id 之前，否则会被 :id 吞掉
 	v := r.Group("/videos")
 	{
-		v.GET("", handler.ListVideo)                       // 视频列表（?category_id= 分类筛选，游客可访问）
-		v.GET("/hot", handler.HotVideos)                   // 热门视频（游客可访问）
-		v.GET("/hot-rank", handler.HotRank)                // 排行榜（?window=day/week/month，游客可访问）
-		v.GET("/:id", handler.GetVideo)                    // 视频详情（游客可访问）
-		v.GET("/:id/play-url", handler.GetPlayURL)         // 播放地址（预签名 URL，游客可访问）
-		v.GET("/users/:id/videos", handler.ListUserVideos) //用户作品列表
+		v.GET("", handler.ListVideo)                                 // 视频列表（?category_id= 分类筛选，游客可访问）
+		v.GET("/hot", handler.HotVideos)                             // 热门视频（游客可访问）
+		v.GET("/hot-rank", handler.HotRank)                          // 排行榜（?window=day/week/month，游客可访问）
+		v.GET("/:id", optional, handler.GetVideo)                    // 视频详情（游客可访问；作者本人可见自己的未公开视频）
+		v.GET("/:id/play-url", optional, handler.GetPlayURL)         // 播放地址（预签名 URL；作者本人可获取未公开视频的播放地址）
+		v.GET("/users/:id/videos", optional, handler.ListUserVideos) // 用户作品列表（本人看全部，他人只看公开）
 
 		v.POST("/upload", auth, handler.Upload)     // 上传视频（SSE 进度，需登录）
 		v.PUT("/:id", auth, handler.UpdateVideo)    // 更新视频信息（需登录）

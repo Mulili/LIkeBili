@@ -76,3 +76,13 @@ func (r *Repository) FindListHistory(c context.Context, userID uint, page, pageS
 	}
 	return &list, total, nil
 }
+
+// CountHistory 统计用户的观看历史条数，供个人中心聚合展示（不取明细）。
+func (r *Repository) CountHistory(c context.Context, userID uint) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(c).Model(&modelsHistory.UserHistory{}).
+		Where("user_id = ?", userID).Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("Method:history.repository.CountHistory: %w", err)
+	}
+	return count, nil
+}

@@ -339,45 +339,55 @@ func (h *Handler) ListVideo(c *gin.Context) {
 	response.Success(c, resp)
 }
 
-// ListUserVideos 分页查询指定用户的视频列表（GET /users/:id/videos，游客可访问）。
-// 查询参数：
-//   - page：页码（默认 1）、page_size：每页条数（默认 12，上限 50）
-//   - status：按状态过滤，不传 = 全部（作者本人查看自己的作品时使用）
+// ListUserVideos 分页查询指定用户的视频列表（GET /users/:id/videos，游客可访问，挂可选鉴权）。
+//
+// 可见性按登录态区分：
+//   - 本人：返回全部未删除作品（含待审核/审核失败/私密），可用 ?status= 分类筛选
+//   - 他人/游客：只返回"审核通过 + 公开"的作品，忽略 ?status=
+//
+// 查询参数：page（默认 1）、page_size（默认 12，上限 50）、status（仅本人视角生效）
 func (h *Handler) ListUserVideos(c *gin.Context) {
 	operation := "ListUserVideos"
-	// ① 解析路径参数：目标用户的 id
+	// ① 取登录态：游客为 0（决定可见范围，不做拦截）
+	viewerID := middleware.GetUserID(c)
+
+	// ② 解析路径参数：目标用户的 id
 	userID, err := param.Parse[uint](c, "id")
 	if err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
 
-	// ② 解析分页参数
+	// ③ 是否本人视角：只有本人能查看自己未公开（待审核/失败/私密）的投稿
+	isSelf := viewerID != 0 && viewerID == userID
+
+	// ④ 解析分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "12"))
 
-	// ③ 解析可选的状态过滤参数：仅当合法时才设置过滤器
+	// ⑤ 解析可选的状态过滤参数：仅本人视角可用（他人视角强制只看公开作品）
 	var statusFilter *uint8
-	statusStr := c.DefaultQuery("status", "")
-	if statusStr != "" {
-		status, err := strconv.ParseUint(statusStr, 10, 8)
-		if err == nil {
-			value := uint8(status)
-			statusFilter = &value
-		} else {
-			logger.Warn("无法解析视频状态", zap.Uint("user_id", userID), zap.Error(err))
+	if isSelf {
+		statusStr := c.DefaultQuery("status", "")
+		if statusStr != "" {
+			status, err := strconv.ParseUint(statusStr, 10, 8)
+			if err == nil {
+				value := uint8(status)
+				statusFilter = &value
+			} else {
+				logger.Warn("无法解析视频状态", zap.Uint("user_id", userID), zap.Error(err))
+			}
 		}
-
 	}
 
-	// ④ 查列表（按状态过滤可选）
-	resp, err := h.svc.ListUserVideos(c.Request.Context(), userID, statusFilter, page, pageSize)
+	// ⑥ 查列表：onlyPublic = 非本人
+	resp, err := h.svc.ListUserVideos(c.Request.Context(), userID, statusFilter, !isSelf, page, pageSize)
 	if err != nil {
 		response.ErrorFrom(c, operation, err)
 		return
 	}
 
-	// ⑤ 成功：返回分页结构
+	// ⑦ 成功：返回分页结构
 	response.Success(c, resp)
 }
 

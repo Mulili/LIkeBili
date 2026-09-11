@@ -2,7 +2,10 @@
 // DTO 文件定义客户端与服务端之间的请求/响应结构体，用于参数绑定和接口契约。
 package favorites
 
-import "LikeBili/internal/models/video"
+import (
+	"LikeBili/internal/models/video"
+	"time"
+)
 
 // =================== 请求体 ===================
 
@@ -38,11 +41,23 @@ type FavoritesResp struct {
 // FavoriteDetailResp 收藏夹详情响应，包含收藏夹信息及其分页视频列表。
 // 用于收藏夹详情页展示，Items 中按收藏时间降序排列。
 type FavoriteDetailResp struct {
-	Favorite FavoritesResp     `json:"favorite"`  // 收藏夹基本信息
-	Items    []video.VideoResp `json:"items"`     // 当前页的视频列表（按收藏时间降序）
-	Total    int64             `json:"total"`     // 该收藏夹的视频总数（用于前端分页计算）
-	Page     int               `json:"page"`      // 当前页码（从 1 开始）
-	PageSize int               `json:"page_size"` // 每页条数
+	Favorite FavoritesResp      `json:"favorite"`  // 收藏夹基本信息
+	Items    []FavoriteItemResp `json:"items"`     // 当前页的条目列表（按收藏时间降序，含失效占位）
+	Total    int64              `json:"total"`     // 该收藏夹的条目总数（含失效视频，与 items 行数口径一致）
+	Page     int                `json:"page"`      // 当前页码（从 1 开始）
+	PageSize int                `json:"page_size"` // 每页条数
+}
+
+// FavoriteItemResp 收藏夹内的单个条目：正常视频，或失效占位。
+// 视频被软删除 / 改为私密 / 被审核驳回后，条目**不消失**而是保留占位：
+//   - Invalid=true 且 Video=nil，前端据此渲染"视频已失效"（文案由前端决定）
+//   - VideoID 始终返回，便于前端去重、key 绑定与跳转判断
+//   - 不返回失效原因（避免把 UP 主"设为私密/被驳回"的操作信息泄露给收藏者）
+type FavoriteItemResp struct {
+	Video       *video.VideoResp `json:"video,omitempty"` // 正常视频信息；失效时为 nil
+	VideoID     uint             `json:"video_id"`        // 视频 ID（失效时仍返回）
+	Invalid     bool             `json:"invalid"`         // 是否已失效（已删除/未过审/非公开）
+	FavoritedAt time.Time        `json:"favorited_at"`    // 收藏时间（列表按此倒序）
 }
 
 // FavoriteToggleResp 收藏/取消收藏操作的响应。
