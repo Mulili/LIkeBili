@@ -7,10 +7,13 @@ import (
 	"LikeBili/internal/models/transcode"
 	modelsVideo "LikeBili/internal/models/video"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // 封装视频数据库操作，不含任何业务逻辑
@@ -62,6 +65,63 @@ func (r *Repository) Update(c context.Context, video *modelsVideo.Video) error {
 		return fmt.Errorf("Method:video.Reposity.Update: %w", result.Error)
 	}
 	return nil
+}
+
+// EnsureCategories 幂等写入内置分类字典（启动时调用）。
+// 冲突（主键或 slug 唯一索引）时忽略：已存在的分类不覆盖，
+// 避免运维在库里调整过的名称被每次启动重置。
+func (r *Repository) EnsureCategories(c context.Context) error {
+	if len(modelsVideo.DefaultCategories) == 0 {
+		return nil
+	}
+	if err := r.db.WithContext(c).Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&modelsVideo.DefaultCategories).Error; err != nil {
+		return fmt.Errorf("Method:video.repository.EnsureCategories: %w", err)
+	}
+	return nil
+}
+
+// ListCategories 查询全部分类字典（按 ID 升序；字典表极小，不分页）。
+func (r *Repository) ListCategories(c context.Context) ([]modelsVideo.Category, error) {
+	var categories []modelsVideo.Category
+	if err := r.db.WithContext(c).Order("id ASC").Find(&categories).Error; err != nil {
+		return nil, fmt.Errorf("Method:video.repository.ListCategories: %w", err)
+	}
+	return categories, nil
+}
+
+// FindFirstCategoryLikeName 按名称模糊匹配分类字典，返回第一个命中（按 ID 升序）。
+// 用途：单字搜索的分类兜底（分类字典只有十几行，全表扫描成本可忽略）。
+// 关键词中的 LIKE 通配符会被转义（MySQL 默认转义符为反斜杠），避免用户输入扩大匹配范围。
+func (r *Repository) FindFirstCategoryLikeName(c context.Context, keyword string) (*modelsVideo.Category, error) {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+
+	var category modelsVideo.Category
+	err := r.db.WithContext(c).Where("name LIKE ?", "%"+escaped+"%").
+		Order("id ASC").First(&category).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil // 无匹配分类，交由上层返回空结果
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.repository.FindFirstCategoryLikeName: %w", err)
+	}
+	return &category, nil
+}
+
+// FindPublicByIDs 按 ID 批量取"审核通过 + 公开"的视频（含发布者），供搜索结果回表组装使用。
+// 这是搜索链路的**二次可见性校验**：即使检索表的冗余状态因同步延迟而滞后，
+// 也不会把已私密/未过审的视频返回给前端（宁可少返回几条，不可泄露）。
+func (r *Repository) FindPublicByIDs(c context.Context, ids []uint) ([]modelsVideo.Video, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var videos []modelsVideo.Video
+	if err := r.db.WithContext(c).Preload("User").
+		Where("id IN ? AND status = ? AND view_status = ?", ids, 2, 1).
+		Find(&videos).Error; err != nil {
+		return nil, fmt.Errorf("Method:video.repository.FindPublicByIDs: %w", err)
+	}
+	return videos, nil
 }
 
 // 批量查找视频

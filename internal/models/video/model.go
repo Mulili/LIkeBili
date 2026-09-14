@@ -30,9 +30,26 @@ type Video struct {
 }
 
 type Category struct {
-	ID   uint   `gorm:"primaryKey" json:"id"`         //分类id
-	Name string `gorm:"type:varchar(64)" json:"name"` //分类名称
-	Slug string `gorm:"type:varchar(64)" json:"slug"` //分类英文标识
+	ID   uint   `gorm:"primaryKey" json:"id"`                     //分类id
+	Name string `gorm:"type:varchar(64)" json:"name"`             //分类名称
+	Slug string `gorm:"type:varchar(64);uniqueIndex" json:"slug"` //分类英文标识（唯一：seed 幂等的冲突判定依据）
+}
+
+// DefaultCategories 内置分类字典（启动时幂等写入）。
+// ID 固定写死：前端上传/筛选按 ID 传参，固定 ID 可避免自增顺序变化导致"分类错位"；
+// slug 唯一索引用于 seed 幂等（已存在则忽略，不覆盖运维侧的名称调整）。
+var DefaultCategories = []Category{
+	{ID: 1, Name: "动画", Slug: "anime"},
+	{ID: 2, Name: "番剧", Slug: "bangumi"},
+	{ID: 3, Name: "游戏", Slug: "game"},
+	{ID: 4, Name: "音乐", Slug: "music"},
+	{ID: 5, Name: "舞蹈", Slug: "dance"},
+	{ID: 6, Name: "科技", Slug: "tech"},
+	{ID: 7, Name: "生活", Slug: "life"},
+	{ID: 8, Name: "鬼畜", Slug: "kichiku"},
+	{ID: 9, Name: "影视", Slug: "movie"},
+	{ID: 10, Name: "娱乐", Slug: "entertainment"},
+	{ID: 11, Name: "知识", Slug: "knowledge"},
 }
 
 func (Video) TableName() string {

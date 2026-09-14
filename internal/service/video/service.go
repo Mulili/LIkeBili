@@ -433,6 +433,16 @@ func (s *Service) HotVideos(c context.Context, page, pageSize uint) (*modelsVide
 	}, nil
 }
 
+// ListCategories 返回全部分类字典（按 ID 升序）。
+// 用途：前端上传选分类、搜索按分类筛选，以及搜索模块的"分类名"检索数据来源。
+func (s *Service) ListCategories(c context.Context) ([]modelsVideo.Category, error) {
+	categories, err := s.repo.ListCategories(c)
+	if err != nil {
+		return nil, fmt.Errorf("Method:video.Service.ListCategories: %w", err)
+	}
+	return categories, nil
+}
+
 // ListUserVideos 分页查询某用户的投稿列表。
 // onlyPublic=true 时只返回"审核通过 + 公开"的作品（他人/游客视角），
 // 由 handler 依据登录态判定：本人看全部（可用 status 分类），他人只看公开。

@@ -38,6 +38,9 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *
 	optional := middleware.OptionalAuth(jwtSvc, rdb)
 
 	// ③ 路由注册
+	// 分类字典：公开接口，挂在 /categories（不属于 /videos 前缀；上传选分类、筛选、搜索共用）
+	r.GET("/categories", handler.ListCategories)
+
 	// 注意：/hot、/hot-rank 等静态路径必须注册在 /:id 之前，否则会被 :id 吞掉
 	v := r.Group("/videos")
 	{

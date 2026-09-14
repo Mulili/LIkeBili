@@ -12,6 +12,7 @@ import (
 	messagehandler "LikeBili/internal/handler/message"
 	profilehandler "LikeBili/internal/handler/profile"
 	rankhandler "LikeBili/internal/handler/rank"
+	searchhandler "LikeBili/internal/handler/search"
 	userhandler "LikeBili/internal/handler/user"
 	videohandler "LikeBili/internal/handler/video"
 	"LikeBili/internal/middleware"
@@ -23,6 +24,7 @@ import (
 	modelsMeta "LikeBili/internal/models/meta"
 	modelsQuality "LikeBili/internal/models/quality"
 	modelsReview "LikeBili/internal/models/review"
+	modelsSearch "LikeBili/internal/models/search"
 	modelsTrans "LikeBili/internal/models/transcode"
 	modelsUser "LikeBili/internal/models/user"
 	modelsVideo "LikeBili/internal/models/video"
@@ -30,6 +32,7 @@ import (
 	repocoin "LikeBili/internal/repository/coin"
 	favRepo "LikeBili/internal/repository/favorites"
 	rpmessage "LikeBili/internal/repository/message"
+	rpsearch "LikeBili/internal/repository/search"
 	rpvideo "LikeBili/internal/repository/video"
 	svccoin "LikeBili/internal/service/coin"
 	svcmessage "LikeBili/internal/service/message"
@@ -97,7 +100,25 @@ func main() {
 		&modelsCoins.UserCoin{},
 		&modelsFollow.Follow{},
 		&modelsHistory.UserHistory{},
+		&modelsSearch.VideoSearch{},
 	)
+	// 分类字典 seed（幂等）：上传时选分类、按分类筛选、搜索按分类名检索都依赖这份字典
+	if err := rpvideo.NewRepository(db).EnsureCategories(context.Background()); err != nil {
+		logger.Warn("分类字典初始化失败", zap.String("operation", "EnsureCategories"), zap.Error(err))
+	}
+	// 搜索检索表初始化：
+	//  ① 幂等创建 ngram 全文索引（不用 AutoMigrate，避免生成不带分词器的同名索引导致中文检索失效）
+	//  ② 检索表为空时全量回填既有视频（首次部署或重建索引时执行一次，之后靠写路径同步）
+	searchRepo := rpsearch.NewRepository(db)
+	if err := searchRepo.EnsureFulltextIndex(context.Background()); err != nil {
+		logger.Warn("搜索全文索引初始化失败", zap.String("operation", "EnsureFulltextIndex"), zap.Error(err))
+	} else if empty, err := searchRepo.IsEmpty(context.Background()); err != nil {
+		logger.Warn("搜索检索表状态检查失败", zap.String("operation", "IsEmpty"), zap.Error(err))
+	} else if empty {
+		if err := searchRepo.RebuildSearchIndex(context.Background()); err != nil {
+			logger.Warn("搜索索引全量回填失败", zap.String("operation", "RebuildSearchIndex"), zap.Error(err))
+		}
+	}
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo, coinSvc)
 	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
 	// --- 视频模块装配 ---
@@ -184,6 +205,9 @@ func main() {
 	// 路由：GET /messages（列表 + 未读数）、POST /messages/read-all（全部已读）、
 	//       POST /messages/:id/read（单条已读）；通知只属于接收者本人，整组需登录
 	messagehandler.RegisterRoutes(api, db, rdb, userBriefBuider, jwtSvc)
+	// --- 搜索模块装配 ---
+	// 路由：GET /search/videos（公开）——关键词 ≥2 字走 video_search 全文检索，1 字降级为分类名兜底
+	searchhandler.RegisterRoutes(api, db, toVideoResp)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
 	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)

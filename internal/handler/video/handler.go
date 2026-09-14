@@ -339,6 +339,19 @@ func (h *Handler) ListVideo(c *gin.Context) {
 	response.Success(c, resp)
 }
 
+// ListCategories 返回全部分类字典（GET /categories，游客可访问）。
+// 用途：前端上传视频时选分类、按分类筛选、搜索页的分类维度。
+func (h *Handler) ListCategories(c *gin.Context) {
+	operation := "ListCategories"
+	// 字典数据量极小，直接全量返回（不分页）
+	categories, err := h.svc.ListCategories(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, operation, err)
+		return
+	}
+	response.Success(c, categories)
+}
+
 // ListUserVideos 分页查询指定用户的视频列表（GET /users/:id/videos，游客可访问，挂可选鉴权）。
 //
 // 可见性按登录态区分：
