@@ -38,6 +38,10 @@ type Service struct {
 	// 由 admin 模块的 Repository 实现，通过接口注入避免 video 反向依赖 admin 包。
 	reviewProvider ReviewProvider
 
+	// searchIndexer 搜索索引同步器（由 search 模块的 Service 实现）。
+	// nil = 不同步检索表（未接入搜索模块），视频主流程不受影响。
+	searchIndexer SearchIndexer
+
 	// transcodePublisher 可选旁路依赖：转码任务发布者（如 MQ）。
 	// nil = 未接入 MQ，走进程内降级转码（transcodeLocal）。
 	transcodePublisher func(videoID uint) error
@@ -48,6 +52,16 @@ type Service struct {
 // 需要知道"审核失败原因"，由外部（admin 模块的 Repository）实现注入。
 type ReviewProvider interface {
 	GetLatestReview(ctx context.Context, videoID uint) (*modelsReview.VideoReview, error)
+}
+
+// SearchIndexer 搜索索引同步接口：视频新增/编辑/删除后维护检索表（video_search）。
+// 由 search 模块的 Service 实现，通过接口注入避免 video 直接依赖 search 包。
+// 约定 fail-open：同步失败只记日志，不影响视频主流程。
+type SearchIndexer interface {
+	// Upsert 依据 videos 表当前状态写入/刷新该视频的检索行
+	Upsert(c context.Context, videoID uint) error
+	// Delete 删除该视频的检索行
+	Delete(c context.Context, videoID uint) error
 }
 
 // UploadVideoInput 上传视频的入参 DTO。
@@ -84,6 +98,12 @@ func WithTranscodeRunner(fn func(videoID uint)) Option {
 // 不注入 = 作者端不展示驳回原因，不影响其它功能。
 func WithReviewProvider(p ReviewProvider) Option {
 	return func(s *Service) { s.reviewProvider = p }
+}
+
+// WithSearchIndexer 注入搜索索引同步器（视频变更时维护检索表）。
+// 不注入 = 不做索引同步，搜索结果会滞后于视频变更，不影响视频主流程。
+func WithSearchIndexer(idx SearchIndexer) Option {
+	return func(s *Service) { s.searchIndexer = idx }
 }
 
 // NewService 构造 Service。必传依赖走位置参数，可选依赖走 Option。
@@ -138,10 +158,13 @@ func (s *Service) UploadVideo(c context.Context, input *UploadVideoInput) (*mode
 		return nil, fmt.Errorf("Method:video.Service.UploadVideo: %w", err)
 	}
 
-	// ⑥ 异步触发转码，不阻塞上传响应
+	// ⑥ 同步检索索引：新视频写入检索表（此时 status=1 待审核，搜索只查已过审+公开，不会提前曝光）
+	s.indexVideo(c, video.ID)
+
+	// ⑦ 异步触发转码，不阻塞上传响应
 	s.triggerTranscode(video.ID)
 
-	// ⑦ 返回 DTO：封面/头像已由 toresp.ToVideoResp 统一拼公开 URL；
+	// ⑧ 返回 DTO：封面/头像已由 toresp.ToVideoResp 统一拼公开 URL；
 	// DTO 不含播放地址（Status=1 未转码完，前端点播放走 GetPresignedUrl 现签）
 	return s.toresp.ToVideoResp(video), nil
 }
@@ -257,7 +280,10 @@ func (s *Service) UpdateVideo(c context.Context, videoID, userID uint, upReq *mo
 		return nil, fmt.Errorf("Method:video.service.UpdateVideo: %w", err)
 	}
 
-	// ⑤ 返回最新 DTO：封面/头像由 toresp 统一拼公开 URL
+	// ⑤ 同步检索索引：标题/简介/分类/可见性任一变更都会影响搜索结果或可见范围
+	s.indexVideo(c, video.ID)
+
+	// ⑥ 返回最新 DTO：封面/头像由 toresp 统一拼公开 URL
 	return s.toresp.ToVideoResp(video), nil
 }
 
@@ -270,6 +296,8 @@ func (s *Service) DeleteVideo(c context.Context, videoID, userID uint) error {
 	if err := s.repo.DeleteVideo(c, video); err != nil {
 		return fmt.Errorf("Method:video.Service.DeleteVideo: %w", err)
 	}
+	// 同步移除检索行：已删视频不应继续占用搜索结果（回表二次校验是兜底，这里从源头清掉）
+	s.unindexVideo(c, videoID)
 	return nil
 }
 
@@ -530,6 +558,28 @@ func (s *Service) AssessVideoAndAuthor(c context.Context, videoID, userID uint) 
 		return nil, fmt.Errorf("Method:video.Service.AssessVideoAndAuthor: %w", codeErrors.ErrVideoForbidden)
 	}
 	return video, nil
+}
+
+// indexVideo 同步单个视频到检索表（fail-open：失败仅记日志，不阻塞视频主流程）。
+func (s *Service) indexVideo(c context.Context, videoID uint) {
+	if s.searchIndexer == nil {
+		return
+	}
+	if err := s.searchIndexer.Upsert(c, videoID); err != nil {
+		logger.Warn("搜索索引同步失败", zap.String("operation", "video.indexVideo"),
+			zap.Uint("video_id", videoID), zap.Error(err))
+	}
+}
+
+// unindexVideo 从检索表移除视频（fail-open）。
+func (s *Service) unindexVideo(c context.Context, videoID uint) {
+	if s.searchIndexer == nil {
+		return
+	}
+	if err := s.searchIndexer.Delete(c, videoID); err != nil {
+		logger.Warn("搜索索引移除失败", zap.String("operation", "video.unindexVideo"),
+			zap.Uint("video_id", videoID), zap.Error(err))
+	}
 }
 
 // triggerTranscode 触发转码任务。

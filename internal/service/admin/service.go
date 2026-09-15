@@ -32,16 +32,30 @@ type Service struct {
 	videoRepo *rpvideo.Repository      // 视频数据访问层：软删超期视频查询与事务硬删
 	storage   *storage.MinIO           // 对象存储：审核时对视频源文件现签预签名 URL；清理时删 MinIO 对象
 	toresp    *toresp.VideoRespBuilder // 视频 DTO 转换器：列表/详情页展示用
+
+	// indexer 搜索索引同步器（由 search 模块的 Service 实现）。
+	// 审核结果会改变视频状态（能否被搜到），需同步检索表；nil = 不同步，不影响审核主流程。
+	indexer SearchIndexer
+}
+
+// SearchIndexer 搜索索引同步接口（由 search 模块的 Service 实现）。
+// 约定 fail-open：同步失败只记日志，不影响审核结果。
+type SearchIndexer interface {
+	// Upsert 依据 videos 表当前状态写入/刷新该视频的检索行（审核结果变更后调用）
+	Upsert(c context.Context, videoID uint) error
+	// Delete 删除该视频的检索行（回收站硬删后调用）
+	Delete(c context.Context, videoID uint) error
 }
 
 // NewService 创建管理员审核服务实例。
 // 通过构造函数注入全部依赖（依赖倒置），便于单元测试替换 mock。
-func NewService(repo *admin.Repository, videoRepo *rpvideo.Repository, storage *storage.MinIO, toresp *toresp.VideoRespBuilder) *Service {
+func NewService(repo *admin.Repository, videoRepo *rpvideo.Repository, storage *storage.MinIO, toresp *toresp.VideoRespBuilder, indexer SearchIndexer) *Service {
 	return &Service{
 		repo:      repo,
 		videoRepo: videoRepo,
 		storage:   storage,
 		toresp:    toresp,
+		indexer:   indexer,
 	}
 }
 
@@ -170,6 +184,15 @@ func (s *Service) Review(c context.Context, adminID, videoID uint, result uint8,
 	if err := s.repo.ReviewTx(c, videoID, adminID, result, reason); err != nil {
 		return fmt.Errorf("Method:admin.service.Review: %w", err)
 	}
+
+	// ⑥ 同步检索索引：审核结果决定该视频能否被搜到
+	//（通过=2 才能出现在搜索结果；驳回=3 会被检索表的可见性过滤挡住），fail-open
+	if s.indexer != nil {
+		if err := s.indexer.Upsert(c, videoID); err != nil {
+			logger.Warn("搜索索引同步失败", zap.String("operation", "admin.Review"),
+				zap.Uint("video_id", videoID), zap.Error(err))
+		}
+	}
 	return nil
 }
 
@@ -220,7 +243,16 @@ func (s *Service) CleanupExpired(c context.Context, adminID uint, days int) (int
 	if err := s.videoRepo.HardDeleteExpiredTx(c, ids); err != nil {
 		return 0, fmt.Errorf("Method:admin.service.CleanupExpired: %w", err)
 	}
-	// ⑤ 删 MinIO：失败只记日志，不阻断主流程（孤儿对象可后续手工清理）
+	// ⑤ 同步清理检索行：视频本体已硬删，检索表若残留会让搜索结果出现"点了打不开的空条目"
+	if s.indexer != nil {
+		for _, id := range ids {
+			if err := s.indexer.Delete(c, id); err != nil {
+				logger.Warn("搜索索引移除失败", zap.String("operation", "admin.CleanupExpired"),
+					zap.Uint("video_id", id), zap.Error(err))
+			}
+		}
+	}
+	// ⑥ 删 MinIO：失败只记日志，不阻断主流程（孤儿对象可后续手工清理）
 	for _, obj := range fileObjs {
 		if err := s.storage.Delete(c, obj); err != nil {
 			logger.Warn("MinIO 文件删除失败", zap.String("operation", "CleanupExpired"),

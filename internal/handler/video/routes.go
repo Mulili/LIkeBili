@@ -21,8 +21,8 @@ import (
 // reviewProvider：审核记录查询器（admin 模块 Repository 实现），
 // 用于作者查看驳回原因；不注入则作者端不展示驳回原因，不影响其它功能。
 // 需登录的写操作（上传/更新/删除）统一挂 AuthRequired 中间件。
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *toresp.VideoRespBuilder, rank *rank.Service, storage *storage.MinIO, broker *transcode.ProgressBroker, jwtSvc *jwtlib.JWT, publishFn func(videoID uint) error, reviewProvider svc.ReviewProvider) {
-	// ① 依赖装配：repo → service（含转码降级 + 审核查询注入）→ handler
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *toresp.VideoRespBuilder, rank *rank.Service, storage *storage.MinIO, broker *transcode.ProgressBroker, jwtSvc *jwtlib.JWT, publishFn func(videoID uint) error, reviewProvider svc.ReviewProvider, searchIndexer svc.SearchIndexer) {
+	// ① 依赖装配：repo → service（含转码降级 + 审核查询 + 搜索索引同步注入）→ handler
 	repo := repo.NewRepository(db)
 	svc := svc.NewService(repo, rdb, storage, toresp, rank,
 		svc.WithTranscodePublisher(publishFn),
@@ -30,6 +30,7 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, toresp *
 			transcode.ProcessVideo(videoID, db, broker, storage)
 		}),
 		svc.WithReviewProvider(reviewProvider),
+		svc.WithSearchIndexer(searchIndexer),
 	)
 	handler := NewHandler(svc)
 

@@ -12,25 +12,37 @@ import (
 	modelsUser "LikeBili/internal/models/user"
 	userrepo "LikeBili/internal/repository/user"
 	codeErrors "LikeBili/pkg/errors"
+	"LikeBili/pkg/logger"
 	"LikeBili/pkg/storage"
 	"context"
 	"fmt"
 	"io"
+
+	"go.uber.org/zap"
 )
 
 // Service 封装用户相关的业务逻辑。
-// 通过构造函数注入两个依赖：
-//   - repo：数据库访问层（users 表的增删改查）
-//   - storage：MinIO 对象存储（文件上传、URL 拼接）
+// 依赖：repo（users 表访问）、storage（对象存储 URL 拼接）、indexer（可选，搜索索引同步）。
 type Service struct {
 	repo    *userrepo.Repository
 	storage *storage.MinIO
+
+	// indexer 搜索索引同步器（由 search 模块的 Service 实现）。
+	// 改昵称后需刷新检索表里的作者展示名；nil = 不同步，不影响资料更新主流程。
+	indexer SearchIndexer
+}
+
+// SearchIndexer 搜索索引同步接口（由 search 模块的 Service 实现）。
+// 约定 fail-open：同步失败只记日志，不影响资料更新。
+type SearchIndexer interface {
+	// RefreshAuthorName 重新同步该用户全部视频在检索表里的作者展示名
+	RefreshAuthorName(c context.Context, userID uint) error
 }
 
 // NewService 创建用户服务实例。
-// 参数：repo（用户数据仓库）、storage（对象存储客户端）。
-func NewService(repo *userrepo.Repository, storage *storage.MinIO) *Service {
-	return &Service{repo: repo, storage: storage}
+// 参数：repo（用户数据仓库）、storage（对象存储客户端）、indexer（搜索索引同步器，可为 nil）。
+func NewService(repo *userrepo.Repository, storage *storage.MinIO, indexer SearchIndexer) *Service {
+	return &Service{repo: repo, storage: storage, indexer: indexer}
 }
 
 // GetUser 查询指定用户的公开信息。
@@ -85,6 +97,14 @@ func (s *Service) UpdateUser(c context.Context, userid uint, req *modelsUser.Upd
 	}
 	if err := s.repo.Update(c, user); err != nil {
 		return nil, fmt.Errorf("Method:user.service.UpdateUser: %w", err)
+	}
+
+	// 昵称变更后同步检索表里的作者展示名（搜索结果中显示的就是这个字段），fail-open
+	if req.Nickname != nil && s.indexer != nil {
+		if err := s.indexer.RefreshAuthorName(c, userid); err != nil {
+			logger.Warn("搜索索引作者名同步失败", zap.String("operation", "user.UpdateUser"),
+				zap.Uint("user_id", userid), zap.Error(err))
+		}
 	}
 
 	return &modelsUser.UserInfoResp{

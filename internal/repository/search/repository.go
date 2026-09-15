@@ -60,11 +60,10 @@ func (r *Repository) IsEmpty(c context.Context) (bool, error) {
 	return count == 0, nil
 }
 
-// RebuildSearchIndex 全量回填检索表（幂等）。
-// 用一条 INSERT ... SELECT ... ON DUPLICATE KEY UPDATE 完成，避免逐行往返；
-// 只回填未软删的视频；作者展示名取"昵称优先、回退用户名"，分类名取字典表名称（缺失为空串）。
-func (r *Repository) RebuildSearchIndex(c context.Context) error {
-	const sqlText = `
+// upsertSQLTemplate 是"从 videos 读取并写入检索表"的公共 SQL 模板：
+// 全量回填与单条同步共用同一套列映射与冲突更新策略，避免两处口径分叉。
+// 其中 %s 为附加过滤条件（会拼在 `WHERE v.deleted_at IS NULL` 之后）。
+const upsertSQLTemplate = `
 INSERT INTO video_search
   (video_id, user_id, category_id, title, description, author_nickname, category_name, status, view_status, created_at, updated_at)
 SELECT v.id, v.user_id, v.category_id, v.title, v.description,
@@ -74,7 +73,7 @@ SELECT v.id, v.user_id, v.category_id, v.title, v.description,
 FROM videos v
 LEFT JOIN users u ON u.id = v.user_id
 LEFT JOIN categories cat ON cat.id = v.category_id
-WHERE v.deleted_at IS NULL
+WHERE v.deleted_at IS NULL%s
 ON DUPLICATE KEY UPDATE
   user_id         = VALUES(user_id),
   category_id     = VALUES(category_id),
@@ -86,8 +85,45 @@ ON DUPLICATE KEY UPDATE
   view_status     = VALUES(view_status),
   created_at      = VALUES(created_at),
   updated_at      = NOW()`
-	if err := r.db.WithContext(c).Exec(sqlText).Error; err != nil {
+
+// RebuildSearchIndex 全量回填检索表（幂等）。
+// 用一条 INSERT ... SELECT ... ON DUPLICATE KEY UPDATE 完成，避免逐行往返；
+// 只回填未软删的视频；作者展示名取"昵称优先、回退用户名"，分类名取字典表名称（缺失为空串）。
+func (r *Repository) RebuildSearchIndex(c context.Context) error {
+	if err := r.db.WithContext(c).Exec(fmt.Sprintf(upsertSQLTemplate, "")).Error; err != nil {
 		return fmt.Errorf("Method:search.repository.RebuildSearchIndex: %w", err)
+	}
+	return nil
+}
+
+// UpsertByVideoID 依据 videos 表当前状态写入/刷新单条检索行。
+// 视频不存在或已软删时不会插入（SELECT 无结果），因此与删除并发时也不会残留检索行。
+func (r *Repository) UpsertByVideoID(c context.Context, videoID uint) error {
+	if err := r.db.WithContext(c).Exec(fmt.Sprintf(upsertSQLTemplate, " AND v.id = ?"), videoID).Error; err != nil {
+		return fmt.Errorf("Method:search.repository.UpsertByVideoID: %w", err)
+	}
+	return nil
+}
+
+// DeleteByVideoID 删除单条检索行（视频删除后调用）。
+func (r *Repository) DeleteByVideoID(c context.Context, videoID uint) error {
+	if err := r.db.WithContext(c).Exec("DELETE FROM video_search WHERE video_id = ?", videoID).Error; err != nil {
+		return fmt.Errorf("Method:search.repository.DeleteByVideoID: %w", err)
+	}
+	return nil
+}
+
+// RefreshAuthorNameByUserID 重新同步某用户全部视频的作者展示名（用户改昵称后调用）。
+// 直接从 users 表取最新值（昵称优先、回退用户名），与回填口径一致，因此无需传入昵称。
+func (r *Repository) RefreshAuthorNameByUserID(c context.Context, userID uint) error {
+	const sqlText = `
+		UPDATE video_search vs
+		JOIN users u ON u.id = vs.user_id
+		SET vs.author_nickname = COALESCE(NULLIF(u.nickname, ''), u.username, ''),
+			vs.updated_at = NOW()
+		WHERE vs.user_id = ?`
+	if err := r.db.WithContext(c).Exec(sqlText, userID).Error; err != nil {
+		return fmt.Errorf("Method:search.repository.RefreshAuthorNameByUserID: %w", err)
 	}
 	return nil
 }

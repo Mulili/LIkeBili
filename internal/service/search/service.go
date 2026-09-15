@@ -107,6 +107,35 @@ func (s *Service) SearchVideos(c context.Context, keyword string, categoryID uin
 	}, nil
 }
 
+// ==================== 索引同步（供 video / admin / user 模块注入调用） ====================
+// 这些方法实现各模块自定义的 SearchIndexer 接口；调用方统一 fail-open（失败只记日志，不阻塞主流程）。
+
+// Upsert 同步单个视频的检索行。
+// 调用时机：上传成功、编辑视频（标题/简介/分类）、审核通过或驳回、作者改公开/私密。
+// 内部按 videos 表当前状态重建整行，因此调用方无需关心具体改了哪些字段。
+func (s *Service) Upsert(c context.Context, videoID uint) error {
+	if err := s.searchRepo.UpsertByVideoID(c, videoID); err != nil {
+		return fmt.Errorf("Method:search.Service.Upsert: %w", err)
+	}
+	return nil
+}
+
+// Delete 删除单个视频的检索行（视频删除后调用），避免已删视频仍出现在搜索结果里。
+func (s *Service) Delete(c context.Context, videoID uint) error {
+	if err := s.searchRepo.DeleteByVideoID(c, videoID); err != nil {
+		return fmt.Errorf("Method:search.Service.Delete: %w", err)
+	}
+	return nil
+}
+
+// RefreshAuthorName 重新同步某用户全部视频的作者展示名（用户改昵称后调用）。
+func (s *Service) RefreshAuthorName(c context.Context, userID uint) error {
+	if err := s.searchRepo.RefreshAuthorNameByUserID(c, userID); err != nil {
+		return fmt.Errorf("Method:search.Service.RefreshAuthorName: %w", err)
+	}
+	return nil
+}
+
 // searchByCategory 单字搜索兜底：把关键词当分类名做模糊匹配，命中第一个分类后返回该分类的视频。
 // 之所以不直接 LIKE 搜标题：中缀模糊查询无法利用索引，大表上会退化为全表扫描。
 func (s *Service) searchByCategory(c context.Context, keyword string, page, pageSize int) (*modelsVideo.ListVideo, error) {

@@ -37,6 +37,7 @@ import (
 	svccoin "LikeBili/internal/service/coin"
 	svcmessage "LikeBili/internal/service/message"
 	"LikeBili/internal/service/rank"
+	svcsearch "LikeBili/internal/service/search"
 	"LikeBili/internal/transcode"
 	"LikeBili/pkg/config"
 	"LikeBili/pkg/database"
@@ -74,6 +75,9 @@ func main() {
 	// 币模块装配：注册/登录时签到发币（auth 依赖 coin，需先构造）
 	coinRepo := repocoin.NewRepository(db)
 	coinSvc := svccoin.NewService(coinRepo, rankSvc)
+	// DTO 转换器：跨模块统一出口（提前构造，搜索等模块装配时也要用到）
+	userBriefBuider := toresp.NewToRespBuilder(minio)
+	toVideoResp := toresp.NewVideoRespBuilder(minio, userBriefBuider)
 	r := gin.Default()
 	r.Use(middleware.CORS())
 	api := r.Group("api/v1")
@@ -119,12 +123,12 @@ func main() {
 			logger.Warn("搜索索引全量回填失败", zap.String("operation", "RebuildSearchIndex"), zap.Error(err))
 		}
 	}
+	// 搜索服务：同一实例既处理搜索请求，也注入给 video/user/admin 做检索表同步
+	searchSvc := svcsearch.NewService(searchRepo, rpvideo.NewRepository(db), toVideoResp)
 	authhandler.RegisterRoutes(api, rdb, db, jwtSvc, tokenTTL, minio, favrepo, coinSvc)
-	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc)
+	userhandler.RegisterRoutes(api, db, rdb, minio, jwtSvc, searchSvc)
 	// --- 视频模块装配 ---
-	broker := transcode.NewProgressBroker()
-	userBriefBuider := toresp.NewToRespBuilder(minio)                 // 转码进度广播器（前端 SSE 订阅用）
-	toVideoResp := toresp.NewVideoRespBuilder(minio, userBriefBuider) // 视频 DTO 转换器
+	broker := transcode.NewProgressBroker() // 转码进度广播器（前端 SSE 订阅用）
 
 	adminRepo := adminRepo.NewRepository(db) // 审核记录查询器（作者端驳回原因展示）
 	//--- 点赞模块装配：notifier 复用 message 服务，rank 复用热度服务 ---
@@ -179,7 +183,7 @@ func main() {
 			return mq.Publish(rabbitmq.QueueTranscode, body)
 		}
 	}
-	videohandler.RegisterRoutes(api, db, rdb, toVideoResp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo)
+	videohandler.RegisterRoutes(api, db, rdb, toVideoResp, rankSvc, minio, broker, jwtSvc, publishFn, adminRepo, searchSvc)
 	//通知模块装配
 	commenthandler.RegisterRoutes(api, db, rdb, msgSvc, userBriefBuider, rankSvc, jwtSvc)
 	// --- 观看历史模块装配（登录用户私有数据） ---
@@ -207,10 +211,10 @@ func main() {
 	messagehandler.RegisterRoutes(api, db, rdb, userBriefBuider, jwtSvc)
 	// --- 搜索模块装配 ---
 	// 路由：GET /search/videos（公开）——关键词 ≥2 字走 video_search 全文检索，1 字降级为分类名兜底
-	searchhandler.RegisterRoutes(api, db, toVideoResp)
+	searchhandler.RegisterRoutes(api, searchSvc)
 	// --- 管理员审核模块装配（仅审核管理员 role=2 可访问） ---
 	videoRepo := rpvideo.NewRepository(db)
-	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc)
+	adminhandler.RegisterRoutes(api, db, rdb, videoRepo, minio, toVideoResp, jwtSvc, searchSvc)
 
 	r.Run(cfg.ServerPort)
 }

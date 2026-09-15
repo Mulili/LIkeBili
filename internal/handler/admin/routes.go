@@ -17,10 +17,11 @@ import (
 // RegisterRoutes 注册管理员审核模块路由，并在此一次性完成依赖装配。
 // 全部审核接口挂 AdminRequired（仅审核管理员 role=2 可访问，role=1/3 均 403）。
 // videoRepo：视频数据访问层，用于软删超期视频的硬删除清理（ListDeleteBefore/HardDeleteExpiredTx）。
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, videoRepo *rpvideo.Repository, storage *storage.MinIO, toresp *toresp.VideoRespBuilder, jwtSvc *jwtlib.JWT) {
+// searchIndexer：搜索索引同步器（search 模块实现），审核结果改变视频状态后刷新检索表；可为 nil。
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, videoRepo *rpvideo.Repository, storage *storage.MinIO, toresp *toresp.VideoRespBuilder, jwtSvc *jwtlib.JWT, searchIndexer svc.SearchIndexer) {
 	// ① 依赖装配：repo → service → handler
 	repo := repo.NewRepository(db)
-	svc := svc.NewService(repo, videoRepo, storage, toresp)
+	svc := svc.NewService(repo, videoRepo, storage, toresp, searchIndexer)
 	handler := NewHandler(svc)
 
 	// ② 审核管理员专用路由组（统一挂 AdminRequired）

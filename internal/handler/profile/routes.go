@@ -31,7 +31,8 @@ import (
 // 依赖说明：聚合 reads 各模块仓储，故在此组装 UserService 与各 Repository。
 func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, minio *storage.MinIO, jwt *jwt.JWT) {
 	// ① 用户资料服务：复用其头像 URL 拼接与"用户不存在"错误语义
-	userSvc := svcuser.NewService(rpuser.NewRepository(db), minio)
+	// indexer 传 nil：个人中心只读资料，不涉及改昵称后的搜索索引同步
+	userSvc := svcuser.NewService(rpuser.NewRepository(db), minio, nil)
 
 	// ② 消息服务：借用其"DB/Redis 取较大值"的未读数口径，保证与 /messages 的红点一致
 	msgSvc := svcmessage.NewService(repomessage.NewRepository(db), rdb, toresp.NewToRespBuilder(minio))

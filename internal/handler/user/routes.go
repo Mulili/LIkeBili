@@ -21,10 +21,11 @@ import (
 //   - rdb:     Redis 客户端，注入鉴权中间件（校验 token 与 Redis 中的一致）
 //   - storage: MinIO 客户端，注入 Service（上传头像 / 生成 URL）
 //   - jwt:     JWT 工具，注入鉴权中间件（解析签名 token）
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, storage *storage.MinIO, jwt *jwt.JWT) {
+//   - indexer: 搜索索引同步器（search 模块实现），改昵称后刷新检索表里的作者展示名；可为 nil
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client, storage *storage.MinIO, jwt *jwt.JWT, indexer service.SearchIndexer) {
 	// 依赖组装：Repository → Service → Handler，层层注入（依赖倒置，便于测试替换）
 	repo := rp.NewRepository(db)
-	svc := service.NewService(repo, storage)
+	svc := service.NewService(repo, storage, indexer)
 	h := NewHandler(svc)
 
 	// 用户模块路由组：最终路径 = /api/v1/users/...
